@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Gestión Académica, Asistencia y Parte Diario - EEST N°2</title>
+  <!-- Metadatos PWA para instalación en celular -->
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="EEST N°2 Gestión">
+  <meta name="theme-color" content="#1e3a8a">
+  <link rel="apple-touch-icon" href="logo.png">
+  <!-- Enlace a la hoja de estilos modular -->
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <!-- MARCA DE AGUA TENUE DE FONDO CON EL ESCUDO DE LA EEST N°2 -->
+  <div class="watermark-school-bg">
+    <img class="school-logo-eest2" alt="Escudo EEST N°2">
+  </div>
+
+  <!-- PANTALLA DE ESPERA INICIAL CON ESCUDO DE LA ESCUELA -->
+  <div id="initialLoaderOverlay" class="initial-loader-overlay">
+    <div class="loader-logo-card">
+      <img class="school-logo-eest2" alt="Escudo E.E.S.T. N°2">
+    </div>
+    <div class="loader-title">E.E.S.T. N°2 de San Fernando</div>
+    <div style="font-size:13px; color:#e2e8f0; font-weight:700; margin-bottom:2px;">"Pbro. Dr. Manuel de San Ginés"</div>
+    <div class="loader-spinner"></div>
+    <div class="loader-subtitle" id="loaderTextMsg">Conectando con Google Sheets y cargando estados administrativos...</div>
+  </div>
+
+  <!-- PANTALLA DE LOGIN PROTEGIDA -->
+  <div id="loginOverlayScreen" class="login-overlay-screen">
+    <div class="login-card-box">
+      <img class="school-logo-eest2" alt="Escudo EEST N°2">
+      <h2 style="font-size:16px; font-weight:900; color:#0f172a;">E.E.S.T. N°2 de San Fernando</h2>
+      <p style="font-size:12px; color:#64748b; font-weight:700; margin-bottom:14px;">"Pbro. Dr. Manuel de San Ginés"<br>Acceso al Sistema de Estados Administrativos</p>
+
+      <div id="loginErrorBanner" style="display:none; background:#fee2e2; color:#b91c1c; padding:8px 10px; border-radius:8px; font-size:12px; font-weight:700; margin-bottom:12px;"></div>
+
+      <div class="form-group" style="text-align:left; margin-bottom:10px;">
+        <label>👤 Usuario</label>
+        <input type="text" id="authInputUser" placeholder="Ej: admin, directivo, silvana..." autocomplete="username">
+      </div>
+
+      <div class="form-group" style="text-align:left; margin-bottom:10px;">
+        <label>🔒 Contraseña o PIN</label>
+        <input type="password" id="authInputPass" placeholder="••••" autocomplete="current-password" onkeydown="if(event.key==='Enter') iniciarSesionSistema()">
+      </div>
+
+      <div style="display:flex; align-items:center; gap:6px; margin-bottom:14px; font-size:12px; color:#475569;">
+        <input type="checkbox" id="authChkRemember" checked style="width:16px; height:16px;">
+        <label for="authChkRemember" style="cursor:pointer; font-weight:700;">Recordar mi sesión en este dispositivo</label>
+      </div>
+
+      <button type="button" id="btnSubmitLogin" class="btn-main btn-print-blue" style="width:100%;" onclick="iniciarSesionSistema()">
+        🔐 Ingresar al Sistema
+      </button>
+    </div>
+  </div>
+
+  <header class="app-header">
+    <div class="header-top">
+      <div class="brand-header-flex">
+        <img class="brand-mini-logo school-logo-eest2" alt="Escudo">
+        <div>
+          <div class="app-title">E.E.S.T. N° 2 — Gestión Académica, Asistencia y Parte Diario</div>
+          <div class="app-subtitle" id="statusSubtitle">Conectando con Google Sheets...</div>
+        </div>
+      </div>
+      <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+        <span id="userSessionPill" class="user-session-pill" style="display:none;">
+          <span id="lblActiveUserName">USUARIO</span>
+          <span id="lblActiveUserRole" class="role-badge-pill">ROL</span>
+        </span>
+        <button class="btn-icon" onclick="abrirModalGestionUsuarios()" id="btnAdminUsuarios" style="display:none; background:#4f46e5;" title="Administrar Usuarios y Roles">👥 Usuarios</button>
+        <button class="btn-icon" onclick="cambiarMiPropiaClavePrompt()" title="Cambiar mi contraseña o PIN">🔑 Clave</button>
+        <button class="btn-icon" onclick="instalarPWA()" id="btnInstalarPWA" style="display:none;" title="Instalar App en el Celular">📲 Instalar App</button>
+        <button class="btn-icon" onclick="abrirModalSelectorCurso(false)" title="Seleccionar, Crear o Eliminar Curso">🏫 Cursos</button>
+        <button class="btn-icon" onclick="abrirModalConfigHorario()" title="Configurar Horario, Materias y Profes del Parte">🗓️ Horarios Parte</button>
+        <button class="btn-icon" onclick="recargarCursoActual()" title="Actualizar datos">🔄</button>
+        <button class="btn-icon" onclick="configurarUrlManual()" title="Configurar URL Script">⚙️</button>
+        <button class="btn-icon" onclick="cerrarSesionActual()" style="background:#dc2626;" title="Cerrar sesión">🚪 Salir</button>
+      </div>
+    </div>
+
+    <div class="header-controls">
+      <select id="cursoSelect" onchange="cambiarCurso(this.value)">
+        <option value="">Cargando cursos...</option>
+      </select>
+      <button class="btn-icon" onclick="abrirModalNuevoAlumno()">+ Alumno</button>
+      <button class="btn-icon" onclick="abrirModalCargaMasivaAlumnos()">+ Lote Alumnos</button>
+      <button class="btn-icon" id="btnHeaderNuevoCurso" onclick="abrirModalSelectorCurso(true)">+ Nuevo Curso</button>
+    </div>
+  </header>
+
+  <nav class="nav-tabs">
+    <button class="nav-tab active" id="tabBtn-asistencia" onclick="mostrarVista('asistencia')">📋 Asistencia</button>
+    <button class="nav-tab" id="tabBtn-parte" onclick="mostrarVista('parte')">🖨️ Parte Imprimible</button>
+    <button class="nav-tab" id="tabBtn-materia" onclick="mostrarVista('materia')">📚 Por Materia</button>
+    <button class="nav-tab" id="tabBtn-alumno" onclick="mostrarVista('alumno')">👤 Por Alumno</button>
+    <button class="nav-tab" id="tabBtn-planilla" onclick="mostrarVista('planilla')">📊 Planilla</button>
+  </nav>
+
+  <main class="container">
+
+    <!-- VISTA 1: ASISTENCIA DIARIA Y WHATSAPP -->
+    <section id="vista-asistencia">
+      <div class="panel">
+        <div class="panel-title">
+          <span>📋 Parte Diario Digital (Envío por WhatsApp)</span>
+          <button class="btn-outline" onclick="marcarTodosPresentes()">✔️ Todos Presentes</button>
+        </div>
+
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Fecha del Parte</label>
+            <input type="date" id="asistFecha" onchange="alCambiarFechaOTurno()">
+          </div>
+
+          <div class="form-group">
+            <label>Mes de Impacto en Planilla</label>
+            <select id="asistMes" onchange="actualizarVistaPreviaWA()">
+              <option value="Marzo">Marzo</option>
+              <option value="Abril">Abril</option>
+              <option value="Mayo">Mayo</option>
+              <option value="Junio">Junio</option>
+              <option value="Julio">Julio</option>
+              <option value="Agosto">Agosto</option>
+              <option value="Septiembre">Septiembre</option>
+              <option value="Octubre">Octubre</option>
+              <option value="Noviembre" selected>Noviembre</option>
+              <option value="Diciembre">Diciembre</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label>Turno / Grupo a tomar asistencia</label>
+            <select id="asistTurnoGrupo" onchange="alCambiarFechaOTurno()">
+              <option value="TT - Teoría|ALL">TT - Teoría (Curso Completo)</option>
+              <option value="TM - Teoría|ALL">TM - Teoría (Curso Completo)</option>
+              <option value="Educación Física|ALL">Educación Física (Curso Completo)</option>
+              <option value="Taller - Grupo E|Grupo E">Taller - Solo Grupo E</option>
+              <option value="Taller - Grupo F|Grupo F">Taller - Solo Grupo F</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label>Modalidad del Día (Valor de Falta)</label>
+            <select id="asistModalidad" onchange="renderListaAsistencia()">
+              <option value="DOBLE" selected>Doble Turno: Teoría + Taller/Ed.Fís (Aus = 0.50 | Tarde = 0.25)</option>
+              <option value="TRIPLE">Triple Turno: Teo + Tal + Ed.Fís (Aus = 0.33 | Tarde = 0.25)</option>
+              <option value="SIMPLE">Turno Único en el día (Aus = 1.00 | Tarde = 0.25)</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label>🔒 Privacidad en Grupo WhatsApp</label>
+            <select id="asistPrivacidadWA" disabled title="Fijado en Solo N° de Orden para proteger la privacidad del estudiante">
+              <option value="SOLO_ORDEN" selected>Solo N° de Orden de Lista (Ej: Orden N° 04)</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label>📲 Aplicación de WhatsApp a usar</label>
+            <select id="asistTipoAppWA" onchange="cambiarPreferenciaAppWA(this.value)">
+              <option value="W4B">WhatsApp Business</option>
+              <option value="PERSONAL">WhatsApp Personal (Común)</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label>Preceptor/a a cargo</label>
+            <input type="text" id="asistPreceptor" placeholder="Ej: Venancio Marcelo" oninput="guardarPreceptorLocal()">
+          </div>
+
+          <div class="form-group">
+            <label>Observaciones del turno (Opcional)</label>
+            <input type="text" id="asistObs" placeholder="Ej: Sin actividad en 5ta hora" oninput="actualizarVistaPreviaWA()">
+          </div>
+        </div>
+
+        <div id="bannerEstadoParte" class="edit-mode-banner"></div>
+
+        <div class="pat-counter-bar">
+          <div class="pat-stat stat-mat">
+            <span id="countMat">0</span>
+            <small>Activos</small>
+          </div>
+          <div class="pat-stat stat-p">
+            <span id="countP">0</span>
+            <small>Presentes (P)</small>
+          </div>
+          <div class="pat-stat stat-a">
+            <span id="countA">0</span>
+            <small>Ausentes (A)</small>
+          </div>
+          <div class="pat-stat stat-t">
+            <span id="countT">0</span>
+            <small>Tardes (T)</small>
+          </div>
+        </div>
+
+        <div id="listaAsistenciaContainer"></div>
+        <div id="contenedorTachadosAsistencia"></div>
+
+        <div class="action-buttons">
+          <button class="btn-main btn-w4b" id="btnGuardarYEnviar" onclick="guardarYEnviarWhatsAppBusiness()">
+            💾 Guardar Asistencia y Abrir WhatsApp
+          </button>
+
+          <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <button class="btn-outline" id="btnSoloAbrirWA" style="flex:1;" onclick="abrirWhatsAppBusinessDirecto()">
+              📲 Solo Abrir WhatsApp (Sin volver a guardar)
+            </button>
+            <button class="btn-outline" style="flex:1;" onclick="copiarPartePortapapeles()">
+              📋 Copiar texto del parte
+            </button>
+          </div>
+        </div>
+
+        <div class="wa-preview-box" id="waPreviewBox"></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-title">
+          <span>📊 Acumulado de Inasistencias (Marzo a Diciembre)</span>
+        </div>
+        <div class="table-wrap" id="tablaAcumuladoInasistencias"></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-title">
+          <span>🕒 Historial de Partes Registrados (Tocá "✏️ Cargar" para revisar un día)</span>
+          <select id="filtroHistorialTurno" onchange="renderHistorialAsistencias()" style="padding:4px 8px; font-size:12px; border-radius:4px;">
+            <option value="ALL">Todos los turnos/grupos</option>
+          </select>
+        </div>
+        <div class="table-wrap" id="tablaHistorialPartes"></div>
+      </div>
+    </section>
+
+    <!-- VISTA 2: PARTE DIARIO IMPRIMIBLE (5 SEMANAS EN 4 PÁGINAS / 2 HOJAS) -->
+    <section id="vista-parte" class="hidden">
+      <div class="pd-toolbar">
+        <div class="pd-toolbar-group">
+          <label for="pdMonthSelect">Mes:</label>
+          <select id="pdMonthSelect" onchange="pdRenderCurrentSelection()">
+            <option value="0">Enero</option>
+            <option value="1">Febrero</option>
+            <option value="2">Marzo</option>
+            <option value="3">Abril</option>
+            <option value="4">Mayo</option>
+            <option value="5">Junio</option>
+            <option value="6">Julio</option>
+            <option value="7">Agosto</option>
+            <option value="8">Septiembre</option>
+            <option value="9">Octubre</option>
+            <option value="10" selected>Noviembre</option>
+            <option value="11">Diciembre</option>
+          </select>
+
+          <label for="pdYearInput">Año:</label>
+          <input type="number" id="pdYearInput" value="2026" min="2024" max="2035" style="width: 68px;" oninput="pdRenderCurrentSelection()">
+
+          <span id="pdModeBadge" class="pd-mode-badge">Mensual (5 semanas en 4 págs. / 2 hojas)</span>
+        </div>
+
+        <div class="pd-toolbar-group">
+          <button type="button" class="pd-btn-action pd-btn-config" onclick="abrirModalConfigHorario()">
+            🗓️ Configurar Materias, Horarios y Profes
+          </button>
+          <button type="button" class="pd-btn-action pd-btn-month" onclick="pdRenderCurrentSelection()">📅 Ver Mes Actual</button>
+          <button type="button" class="pd-btn-action pd-btn-year" onclick="pdRenderFullYear()">📚 Ciclo Lectivo (Mar-Dic)</button>
+          <button type="button" class="pd-btn-action pd-btn-print" onclick="imprimirParteDiarioA4()">🖨️ Imprimir / Guardar PDF</button>
+        </div>
+
+        <div class="pd-hint">
+          💡 <strong>Parte Diario Mensual (5 Semanas en 4 Páginas / 2 Hojas A4 — Curso: <span id="pdCursoLabel">Curso</span>):</strong>
+          <strong>Hoja 1 (Págs. 1 y 2):</strong> Frente Firmas y Dorso Ausentes de Lunes, Martes y Miércoles |
+          <strong>Hoja 2 (Págs. 3 y 4):</strong> Frente Firmas y Dorso Ausentes de Jueves y Viernes.
+        </div>
+      </div>
+
+      <div class="pd-scroll-preview">
+        <div id="pdDocumentRoot"></div>
+      </div>
+    </section>
+
+    <!-- VISTA 3: CARGA RÁPIDA POR MATERIA -->
+    <section id="vista-materia" class="hidden">
+      <div class="panel">
+        <div class="panel-title">
+          <span>📚 Calificaciones y Valoraciones por Materia (Ordenadas: 📘 Teoría y 🔧 Taller)</span>
+          <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+            <label style="font-size:11.5px; color:#475569; display:flex; align-items:center; gap:4px; cursor:pointer;">
+              <input type="checkbox" id="chkMostrarTachadosMateria" onchange="renderVistaMateria()">
+              Ver tachados
+            </label>
+            <button class="btn-outline" onclick="abrirModalNuevaMateria()">+ Agregar Materia</button>
+            <button class="btn-outline" onclick="renombrarMateriaActual()">✏️ Renombrar</button>
+            <button class="btn-danger-outline" onclick="eliminarMateriaActual()">🗑️ Eliminar Materia</button>
+          </div>
+        </div>
+        <div class="form-group" style="margin-bottom:12px;">
+          <label>Seleccionar Materia (Primero Teoría, luego Taller)</label>
+          <select id="materiaSelect" onchange="renderVistaMateria()"></select>
+        </div>
+        <div id="contenedorTarjetasMateria"></div>
+      </div>
+    </section>
+
+    <!-- VISTA 4: FICHA INDIVIDUAL POR ALUMNO + INFORME FAMILIAR -->
+    <section id="vista-alumno" class="hidden">
+      <div class="panel">
+        <div class="panel-title">
+          <span>👤 Ficha Académica, Comunicado Familiar (WhatsApp) y PDF Cuaderno</span>
+        </div>
+        <div class="form-group" style="margin-bottom:12px;">
+          <label>Seleccionar Estudiante (Incluye Activos y Tachados)</label>
+          <select id="alumnoSelect" onchange="renderVistaAlumno()"></select>
+        </div>
+        <div id="contenedorFichaAlumno"></div>
+      </div>
+    </section>
+
+    <!-- VISTA 5: PLANILLA GENERAL COMPLETA -->
+    <section id="vista-planilla" class="hidden">
+      <div class="panel">
+        <div class="panel-title">
+          <span>📊 Planilla General del Curso (Ordenada: 📘 Teoría primero | 🔧 Taller después)</span>
+          <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+            <label style="font-size:11.5px; color:#475569; display:flex; align-items:center; gap:4px; cursor:pointer;">
+              <input type="checkbox" id="chkMostrarTachadosPlanilla" checked onchange="renderTablaCompleta()">
+              Mostrar tachados
+            </label>
+            <button class="btn-outline" onclick="abrirModalNuevaMateria()">+ Agregar Materia</button>
+          </div>
+        </div>
+        <div class="table-wrap" id="contenedorTablaCompleta"></div>
+      </div>
+    </section>
+
+    <div id="printComunicadosRoot"></div>
+
+  </main>
+
+  <!-- MODAL 0: ADMINISTRACIÓN DE USUARIOS Y ROLES (ADMIN Y DIRECTIVO) -->
+  <div id="modalGestionUsuarios" class="modal-backdrop">
+    <div class="modal-box" style="max-width:740px;">
+      <div class="modal-header">
+        <h2>👥 Administración de Usuarios y Permisos</h2>
+        <button class="btn-outline" onclick="cerrarModalGestionUsuarios()">✖ Cerrar</button>
+      </div>
+
+      <div style="background:#f8fafc; border:1px solid #cbd5e1; border-radius:8px; padding:12px; margin-bottom:14px;">
+        <h3 style="font-size:13.5px; color:#1e3a8a; margin-bottom:8px;">➕ Crear o Editar Usuario</h3>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Usuario (sin espacios)</label>
+            <input type="text" id="usrFormLogin" placeholder="Ej: silvana">
+          </div>
+          <div class="form-group">
+            <label>Clave / PIN</label>
+            <input type="text" id="usrFormClave" placeholder="Ej: 1234">
+          </div>
+          <div class="form-group">
+            <label>Apellido y Nombre</label>
+            <input type="text" id="usrFormNombre" placeholder="Ej: LAREU SILVANA">
+          </div>
+          <div class="form-group">
+            <label>Rol en la Escuela</label>
+            <select id="usrFormRol" onchange="actualizarVisibilidadCursosPreceptor()">
+              <option value="PRECEPTOR">PRECEPTOR/A (Por cursos)</option>
+              <option value="DIRECTIVO">DIRECTIVO (Acceso Total)</option>
+              <option value="ADMIN">ADMINISTRADOR (Acceso Total)</option>
+            </select>
+          </div>
+        </div>
+
+        <div id="usrFormCursosBox" class="form-group" style="margin-top:10px;">
+          <label>Cursos habilitados para este Preceptor/a (tildá los que correspondan)</label>
+          <div id="usrFormCheckboxesCursos" style="display:flex; flex-wrap:wrap; gap:10px; padding:8px; background:#fff; border:1px solid #cbd5e1; border-radius:6px;"></div>
+        </div>
+
+        <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:10px;">
+          <button type="button" class="btn-outline" onclick="limpiarFormularioGestionUsuario()">Limpiar</button>
+          <button type="button" class="btn-main btn-print-blue" style="padding:8px 14px; font-size:12.5px;" onclick="guardarUsuarioDesdePanel()">💾 Guardar Usuario</button>
+        </div>
+      </div>
+
+      <h3 style="font-size:13.5px; color:#0f172a; margin-bottom:8px;">📋 Usuarios Activos en Google Sheets</h3>
+      <div class="table-wrap" id="contenedorTablaUsuariosSistema"></div>
+    </div>
+  </div>
+
+  <!-- MODAL 1: SELECTOR, CREADOR Y ELIMINADOR DE CURSOS -->
+  <div id="modalSelectorCurso" class="modal-backdrop">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h2>🏫 Seleccionar, Crear o Eliminar Curso</h2>
+        <button class="btn-outline" onclick="cerrarModalSelectorCurso()">✖ Cerrar</button>
+      </div>
+
+      <div id="seccionSeleccionarCursoExistente">
+        <p style="font-size:12.5px; color:#475569; margin-bottom:10px;">
+          Elegí el curso con el que querés trabajar hoy, creá uno nuevo o eliminá un curso con el botón 🗑️:
+        </p>
+        <div id="gridCursosDisponibles" class="course-cards-grid"></div>
+
+        <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:space-between; border-top:1px solid #e2e8f0; padding-top:12px;">
+          <button type="button" id="btnAbrirFormCrearCurso" class="btn-main btn-w4b" style="padding:10px 14px; font-size:13px;" onclick="mostrarFormularioNuevoCurso(true)">
+            ➕ Crear Nuevo Curso desde Cero
+          </button>
+          <button type="button" class="btn-outline" onclick="abrirModalConfigHorarioDesdeSelector()">
+            🗓️ Configurar Horarios / Profes del Curso Actual
+          </button>
+        </div>
+      </div>
+
+      <div id="seccionFormularioNuevoCurso" class="hidden" style="margin-top:12px;">
+        <div style="background:#f8fafc; border:1px solid #cbd5e1; border-radius:8px; padding:12px;">
+          <h3 style="font-size:14px; color:#1e3a8a; margin-bottom:10px;">✨ Crear Nuevo Curso en Google Sheets</h3>
+
+          <div class="form-grid">
+            <div class="form-group">
+              <label>Nombre del Curso (Ej: 1ro_8va o 3ro_2da)</label>
+              <input type="text" id="ncNombreCurso" placeholder="Ej: 1ro_8va">
+            </div>
+            <div class="form-group">
+              <label>Preceptor/a Turno Mañana (TM)</label>
+              <input type="text" id="ncPrecTM" placeholder="Ej: Lareu Silvana">
+            </div>
+            <div class="form-group">
+              <label>Preceptor/a Turno Tarde (TT)</label>
+              <input type="text" id="ncPrecTT" placeholder="Ej: Venancio Marcelo">
+            </div>
+            <div class="form-group">
+              <label>Preceptor/a Turno Vespertino (TV)</label>
+              <input type="text" id="ncPrecTV" placeholder="Opcional">
+            </div>
+          </div>
+
+          <div class="form-group" style="margin-top:10px;">
+            <label>Materias del Curso (Separadas por coma). Si es de 1° a 3° año y ponés "Taller", se autogeneran los 3 módulos del Ciclo Básico.</label>
+            <textarea id="ncListaMaterias" rows="2" placeholder="Prácticas del Lenguaje, Matemática, Ciencias Naturales, Taller"></textarea>
+          </div>
+
+          <div class="form-group" style="margin-top:10px;">
+            <label>Lista Inicial de Estudiantes (Opcional — 1 por renglón: APELLIDO, NOMBRE | Grupo)</label>
+            <textarea id="ncListaEstudiantes" rows="5" placeholder="BALDAN, AMELIA | Grupo 1&#10;BALMACEDA, BENJAMIN | Grupo 1"></textarea>
+          </div>
+
+          <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:12px; flex-wrap:wrap;">
+            <button type="button" class="btn-outline" onclick="mostrarFormularioNuevoCurso(false)">⬅ Volver a mis cursos</button>
+            <button type="button" class="btn-main btn-print-blue" id="btnConfirmarCrearCurso" style="padding:10px 16px; font-size:13px;" onclick="ejecutarCreacionNuevoCurso()">
+              🚀 Crear Curso y Pasar a Configurar Horario del Parte
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL 2: CONFIGURAR HORARIOS DEL PARTE -->
+  <div id="modalConfigHorario" class="modal-backdrop">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h2>🗓️ Configurar Horario, Materias y Profesores (<span id="lblCursoConfigHorario"></span>)</h2>
+        <button class="btn-outline" onclick="cerrarModalConfigHorario()">✖ Cerrar</button>
+      </div>
+
+      <div class="form-grid" style="margin-bottom:12px; background:#f1f5f9; padding:10px; border-radius:8px;">
+        <div class="form-group">
+          <label>Preceptor/a TM (Mañana)</label>
+          <input type="text" id="cfgPrecTM">
+        </div>
+        <div class="form-group">
+          <label>Preceptor/a TT (Tarde)</label>
+          <input type="text" id="cfgPrecTT">
+        </div>
+        <div class="form-group">
+          <label>Preceptor/a TV (Vespertino)</label>
+          <input type="text" id="cfgPrecTV">
+        </div>
+      </div>
+
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:8px;">
+        <strong style="font-size:12.5px; color:#0f172a;">Bloques de Clases (Lunes a Viernes):</strong>
+        <div style="display:flex; gap:6px; flex-wrap:wrap;">
+          <button type="button" class="btn-outline" onclick="agregarFilaEditorHorario('LUNES')">+ Agregar Bloque</button>
+        </div>
+      </div>
+
+      <div id="contenedorFilasEditorHorario" style="max-height:46vh; overflow-y:auto; padding-right:4px;"></div>
+
+      <div style="margin-top:12px; padding-top:10px; border-top:1px solid #e2e8f0; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+        <label style="font-size:12px; font-weight:700; color:#1e3a8a; display:flex; align-items:center; gap:6px; cursor:pointer;">
+          <input type="checkbox" id="chkSincronizarMateriasPlanilla" checked>
+          Crear automáticamente en la planilla las materias nuevas
+        </label>
+
+        <div style="display:flex; gap:8px;">
+          <button type="button" class="btn-outline" onclick="cerrarModalConfigHorario()">Cancelar</button>
+          <button type="button" class="btn-main btn-w4b" id="btnGuardarHorarioSheet" style="padding:10px 16px; font-size:13px;" onclick="guardarHorarioEnGoogleSheet()">
+            💾 Guardar Horario en Google Sheets
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL 3: CARGA MASIVA DE ALUMNOS -->
+  <div id="modalCargaMasivaAlumnos" class="modal-backdrop">
+    <div class="modal-box" style="max-width:560px;">
+      <div class="modal-header">
+        <h2>👥 Carga Masiva de Estudiantes (<span id="lblCursoLoteAlumnos"></span>)</h2>
+        <button class="btn-outline" onclick="cerrarModalCargaMasivaAlumnos()">✖ Cerrar</button>
+      </div>
+      <div class="form-group" style="margin-bottom:8px;">
+        <label>Grupo por defecto</label>
+        <input type="text" id="loteGrupoDefault" value="Grupo 1">
+      </div>
+      <div class="form-group">
+        <label>Lista de Estudiantes (1 por renglón)</label>
+        <textarea id="loteTextoEstudiantes" rows="8" placeholder="ÁLVAREZ, LUCAS | Grupo 1&#10;BENÍTEZ, SOFÍA | Grupo 2"></textarea>
+      </div>
+      <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:12px;">
+        <button type="button" class="btn-outline" onclick="cerrarModalCargaMasivaAlumnos()">Cancelar</button>
+        <button type="button" class="btn-main btn-w4b" style="padding:9px 15px; font-size:13px;" onclick="ejecutarCargaMasivaAlumnos()">
+          💾 Guardar Estudiantes
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <!-- Módulos JavaScript separados -->
+  <script src="core.js"></script>
+  <script src="academico.js"></script>
+  <script src="parte.js"></script>
+</body>
+</html>
