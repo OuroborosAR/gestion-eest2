@@ -115,12 +115,6 @@ function parsearNotaNumerica(val) {
   return (!isNaN(n) && n >= 1 && n <= 10) ? n : NaN;
 }
 
-/**
- * Calcula la Calificación Final de una materia:
- * - Promedia 1°C y 2°C solo si ambos están aprobados (>= 7).
- * - Si en Intensificación 1°C (int1) obtuvo >= 7, utiliza esa nota para promediar con el 2°C.
- * - Devuelve decimales .5 cuando corresponde (ej: 7 y 10 -> "8.5").
- */
 function calcularCalificacionFinalMateria(objNotas) {
   if (!objNotas) return "";
   const c1 = parsearNotaNumerica(objNotas.cal1);
@@ -141,12 +135,6 @@ function calcularCalificacionFinalMateria(objNotas) {
   return "";
 }
 
-/**
- * Calcula el valor de TALLER (Calificación General) en Ciclo Básico a partir de las 3 materias de taller:
- * - Valoraciones: 3 TEA -> TEA | Al menos un TED -> TED | Al menos un TEP -> TEP.
- * - Calificaciones: Si hay alguna < 7, queda la más alta de 6 hacia abajo.
- *   Si las 3 son >= 7, pondera a entero (.66 sube, .33 baja).
- */
 function calcularResumenSubModulosTallerCB(valoresTresModulos, esValoracion) {
   const limpios = (valoresTresModulos || [])
     .map(v => String(v === undefined || v === null ? "" : v).trim().toUpperCase())
@@ -173,7 +161,6 @@ function calcularResumenSubModulosTallerCB(valoresTresModulos, esValoracion) {
     }
   });
 
-  // Si alguna calificación es menor a 7, queda el valor más alto de 6 hacia abajo
   const desaprobadas = numeros.filter(n => n < 7);
   if (desaprobadas.length > 0) {
     return String(Math.max(...desaprobadas));
@@ -181,7 +168,6 @@ function calcularResumenSubModulosTallerCB(valoresTresModulos, esValoracion) {
 
   if (tieneAus) return "AUS";
 
-  // Si las 3 calificaciones son de 7 para arriba, pondera (.66 hacia arriba, .33 hacia abajo)
   if (numeros.length === 3 && numeros.every(n => n >= 7)) {
     const suma = numeros[0] + numeros[1] + numeros[2];
     return String(Math.round(suma / 3));
@@ -194,12 +180,10 @@ function recalcularNotasEstudianteLocal(est, matEditada, keyEditada) {
   if (!est || !est.notas || !matEditada) return;
   const notasMat = est.notas[matEditada.indice] || {};
 
-  // 1. Si se editó cal1, cal2 o int1 de una materia, recalcular su Calificación Final
   if (["cal1", "cal2", "int1"].includes(keyEditada)) {
     notasMat.final = calcularCalificacionFinalMateria(notasMat);
   }
 
-  // 2. Si es un submódulo de Taller de Ciclo Básico, recalcular TALLER (Calificación General)
   if (matEditada.esSubTallerCB) {
     const modulosSub = (estado.materias || []).filter(m => m.esSubTallerCB).slice(0, 3);
     const matResumen = (estado.materias || []).find(m => m.esResumenTallerCB);
@@ -208,19 +192,16 @@ function recalcularNotasEstudianteLocal(est, matEditada, keyEditada) {
       if (!est.notas[matResumen.indice]) est.notas[matResumen.indice] = {};
       const notasResumen = est.notas[matResumen.indice];
 
-      // Valoraciones 1°C y 2°C
       ["val1", "val2"].forEach(kVal => {
         const vals = modulosSub.map(m => (est.notas[m.indice] && est.notas[m.indice][kVal]) || "");
         notasResumen[kVal] = calcularResumenSubModulosTallerCB(vals, true);
       });
 
-      // Calificaciones 1°C y 2°C
       ["cal1", "cal2"].forEach(kCal => {
         const cals = modulosSub.map(m => (est.notas[m.indice] && est.notas[m.indice][kCal]) || "");
         notasResumen[kCal] = calcularResumenSubModulosTallerCB(cals, false);
       });
 
-      // Intensificación 1°C de Taller: combina notas intensificadas (>=7) con módulos ya aprobados en 1°C
       const tieneAlgunInt1 = modulosSub.some(m => String((est.notas[m.indice] && est.notas[m.indice].int1) || "").trim() !== "");
       if (tieneAlgunInt1) {
         const calsInt1Efectivas = modulosSub.map(m => {
@@ -235,7 +216,6 @@ function recalcularNotasEstudianteLocal(est, matEditada, keyEditada) {
         notasResumen.int1 = "";
       }
 
-      // Calificación Final de Taller General
       notasResumen.final = calcularCalificacionFinalMateria(notasResumen);
     }
   }
@@ -271,10 +251,12 @@ function turnoPerteneceATaller(turnoStr) {
   return t.indexOf("taller") !== -1 || t.indexOf("grupo ") !== -1 || t.indexOf("gr.") !== -1;
 }
 
-function textoNominaContieneEstudiante(textoNomina, est) {
-  if (!textoNomina) return false;
+function buscarEstudianteEnNominaConDetalle(textoNomina, est) {
+  if (!textoNomina) return { presenteEnNomina: false, esJustificada: false };
   const limp = String(textoNomina).split("| Obs:")[0].trim();
-  if (!limp || limp.toLowerCase().indexOf("sin ") === 0) return false;
+  if (!limp || limp.toLowerCase().indexOf("sin ") === 0 || limp.indexOf("[SIN ACTIVIDAD") === 0) {
+    return { presenteEnNomina: false, esJustificada: false };
+  }
 
   const items = limp.split("|").map(s => s.trim()).filter(Boolean);
   const ordStr = String(est.orden || "").trim();
@@ -282,13 +264,22 @@ function textoNominaContieneEstudiante(textoNomina, est) {
   const nomEstLower = String(est.nombre || "").trim().toLowerCase();
 
   for (const item of items) {
-    const itemLow = item.toLowerCase();
-    if (nomEstLower && itemLow.indexOf(nomEstLower) !== -1) return true;
-    const mOrd = item.match(/^(?:Orden\s*N°\s*)?0*(\d+)[\.\s]/i);
-    if (mOrd && mOrd[1] === ordStr) return true;
-    if (item.startsWith(`${ordPad}.`) || item.startsWith(`${ordStr}.`)) return true;
+    const tieneJ = item.indexOf("[J]") !== -1;
+    const itemSinJ = item.replace(/\[J\]/gi, "").trim();
+    const itemLow = itemSinJ.toLowerCase();
+
+    if (nomEstLower && itemLow.indexOf(nomEstLower) !== -1) {
+      return { presenteEnNomina: true, esJustificada: tieneJ };
+    }
+    const mOrd = itemSinJ.match(/^(?:Orden\s*N°\s*)?0*(\d+)[\.\s]/i);
+    if (mOrd && mOrd[1] === ordStr) {
+      return { presenteEnNomina: true, esJustificada: tieneJ };
+    }
+    if (itemSinJ.startsWith(`${ordPad}.`) || itemSinJ.startsWith(`${ordStr}.`)) {
+      return { presenteEnNomina: true, esJustificada: tieneJ };
+    }
   }
-  return false;
+  return { presenteEnNomina: false, esJustificada: false };
 }
 
 function obtenerFechasInasistenciasEstudiante(est) {
@@ -298,17 +289,21 @@ function obtenerFechasInasistenciasEstudiante(est) {
 
   const copiaHist = [...hist].reverse();
   copiaHist.forEach(item => {
+    if (item.estadoDia && item.estadoDia !== "NORMAL") return;
+    if (String(item.nominaAusentes || "").indexOf("[SIN ACTIVIDAD") === 0) return;
+
     const fCorta = fechaCortaDDMM(item.fecha);
     if (!fCorta) return;
     const esTal = turnoPerteneceATaller(item.turnoGrupo);
 
-    const estuvoAusente = textoNominaContieneEstudiante(item.nominaAusentes, est);
-    const llegoTarde = textoNominaContieneEstudiante(item.nominaTardes, est);
+    const infoAus = buscarEstudianteEnNominaConDetalle(item.nominaAusentes, est);
+    const infoTar = buscarEstudianteEnNominaConDetalle(item.nominaTardes, est);
 
-    if (estuvoAusente) {
-      if (esTal) talSet.add(fCorta);
-      else teoSet.add(fCorta);
-    } else if (llegoTarde) {
+    if (infoAus.presenteEnNomina) {
+      const etiqueta = infoAus.esJustificada ? `${fCorta}(J)` : fCorta;
+      if (esTal) talSet.add(etiqueta);
+      else teoSet.add(etiqueta);
+    } else if (infoTar.presenteEnNomina) {
       if (esTal) talSet.add(`${fCorta}(T)`);
       else teoSet.add(`${fCorta}(T)`);
     }
@@ -327,7 +322,6 @@ function obtenerResumenMensualAbreviado(est) {
   return partes.join(" | ");
 }
 
-// Privacidad estricta en el Parte Diario grupal: únicamente por N° de Orden de lista
 function formatearEstudianteParaWhatsApp(est) {
   const ordStr = String(est.orden || "").padStart(2, "0");
   const grp = est.grupo ? ` (${est.grupo})` : "";
@@ -337,6 +331,29 @@ function formatearEstudianteParaWhatsApp(est) {
 function esEstudianteTachado(est) {
   const st = String(est.estado || "Activo").toLowerCase();
   return st.indexOf("tachado") !== -1 || st.indexOf("baja") !== -1 || st.indexOf("pase") !== -1;
+}
+
+/* ==================== ESTADO DEL DÍA / TURNO (SIN DOCENTES, SUSPENSIÓN, FERIADO) ==================== */
+const ETIQUETAS_ESTADO_DIA = {
+  NORMAL: "Clases Normales",
+  SIN_DOCENTES: "Sin Docentes",
+  SUSPENSION: "Suspensión de Clases",
+  FERIADO: "Feriado / Asueto",
+  PARO: "Paro Docente / Transporte",
+  JORNADA: "Jornada Institucional"
+};
+
+function obtenerEstadoDiaActual() {
+  const sel = document.getElementById("asistEstadoDia");
+  return sel ? (sel.value || "NORMAL") : "NORMAL";
+}
+
+function obtenerEtiquetaMotivoDia(codigo) {
+  return ETIQUETAS_ESTADO_DIA[codigo] || codigo || "Sin Actividad";
+}
+
+function alCambiarEstadoDia() {
+  renderListaAsistencia();
 }
 
 function inicializarFechaHoy() {
@@ -399,8 +416,10 @@ function cargarParteGuardadoSiExiste() {
   (estado.estudiantes || []).forEach(est => { asistenciaActual[est.filaHoja] = "P"; });
 
   const fechaBuscada = formatearFechaInput();
-  const turnoBuscado = (document.getElementById("asistTurnoGrupo").value || "").split("|")[0].trim();
+  const turnoBuscado = (document.getElementById("asistTurnoGrupo")?.value || "").split("|")[0].trim();
   const banner = document.getElementById("bannerEstadoParte");
+  const selEstDia = document.getElementById("asistEstadoDia");
+  const inpObs = document.getElementById("asistObs");
 
   const registroExistente = (estado.historialAsistencias || []).find(item => {
     const fItem = normalizarFechaDDMMYYYY(item.fecha);
@@ -409,6 +428,8 @@ function cargarParteGuardadoSiExiste() {
   });
 
   if (!registroExistente) {
+    if (selEstDia) selEstDia.value = "NORMAL";
+    if (inpObs) inpObs.value = "";
     if (banner) {
       banner.className = "edit-mode-banner new-entry";
       banner.textContent = `🆕 Parte nuevo para ${fechaBuscada} (${turnoBuscado}).`;
@@ -416,9 +437,36 @@ function cargarParteGuardadoSiExiste() {
     return false;
   }
 
+  // Restaurar modalidad del día según el valor de ausencia guardado si corresponde
+  const selMod = document.getElementById("asistModalidad");
+  if (selMod && registroExistente.valorAusencia) {
+    const vAus = Number(registroExistente.valorAusencia);
+    if (vAus === 0.33) selMod.value = "TRIPLE";
+    else if (vAus === 1) selMod.value = "SIMPLE";
+    else if (vAus === 0.5) selMod.value = "DOBLE";
+  }
+
+  // Detectar si el registro corresponde a un día sin actividad
+  let estDiaGuardado = registroExistente.estadoDia || "NORMAL";
   const textoAus = String(registroExistente.nominaAusentes || "");
-  if (textoAus && textoAus.toLowerCase() !== "sin ausentes") {
-    textoAus.split("|").map(s => s.trim()).forEach(itemStr => marcarEstudianteDesdeTextoHistorial(itemStr, "A"));
+  if (estDiaGuardado === "NORMAL" && textoAus.indexOf("[SIN ACTIVIDAD:") === 0) {
+    const mMotivo = textoAus.match(/\[SIN ACTIVIDAD:\s*([^—\]]+)/i);
+    const txtMot = mMotivo ? mMotivo[1].trim().toLowerCase() : "";
+    if (txtMot.indexOf("docente") !== -1) estDiaGuardado = "SIN_DOCENTES";
+    else if (txtMot.indexOf("suspens") !== -1) estDiaGuardado = "SUSPENSION";
+    else if (txtMot.indexOf("feriado") !== -1 || txtMot.indexOf("asueto") !== -1) estDiaGuardado = "FERIADO";
+    else if (txtMot.indexOf("paro") !== -1) estDiaGuardado = "PARO";
+    else if (txtMot.indexOf("jornada") !== -1) estDiaGuardado = "JORNADA";
+    else estDiaGuardado = "SUSPENSION";
+  }
+  if (selEstDia) selEstDia.value = estDiaGuardado;
+
+  if (estDiaGuardado === "NORMAL" && textoAus && textoAus.toLowerCase() !== "sin ausentes") {
+    textoAus.split("|").map(s => s.trim()).forEach(itemStr => {
+      const esJust = itemStr.indexOf("[J]") !== -1;
+      const limpioItem = itemStr.replace(/\[J\]/gi, "").trim();
+      marcarEstudianteDesdeTextoHistorial(limpioItem, esJust ? "J" : "A");
+    });
   }
 
   let textoTar = String(registroExistente.nominaTardes || "");
@@ -426,17 +474,21 @@ function cargarParteGuardadoSiExiste() {
   if (textoTar.indexOf("| Obs:") !== -1) {
     const divObs = textoTar.split("| Obs:");
     textoTar = divObs[0].trim();
-    obsGuardada = (divObs[1] || "").replace(/\s*\[ValAus:[0-9.]+\]/g, "").trim();
+    obsGuardada = (divObs[1] || "")
+      .replace(/\s*\[ValAus:[0-9.]+\]/g, "")
+      .replace(/\s*\[EstDia:[A-Z_]+\]/g, "")
+      .trim();
   }
-  document.getElementById("asistObs").value = obsGuardada;
+  if (inpObs) inpObs.value = obsGuardada;
 
-  if (textoTar && textoTar.toLowerCase() !== "sin tardes") {
+  if (estDiaGuardado === "NORMAL" && textoTar && textoTar.toLowerCase() !== "sin tardes" && textoTar.toLowerCase() !== "sin actividad") {
     textoTar.split("|").map(s => s.trim()).forEach(itemStr => marcarEstudianteDesdeTextoHistorial(itemStr, "T"));
   }
 
   if (banner) {
     banner.className = "edit-mode-banner saved";
-    banner.textContent = `📌 Viendo parte guardado del ${fechaBuscada} (${turnoBuscado}).`;
+    const extraEstado = estDiaGuardado !== "NORMAL" ? ` — [${obtenerEtiquetaMotivoDia(estDiaGuardado)}]` : "";
+    banner.textContent = `📌 Viendo parte guardado del ${fechaBuscada} (${turnoBuscado})${extraEstado}.`;
   }
   return true;
 }
@@ -622,42 +674,59 @@ function renderListaAsistencia() {
   const lista = obtenerEstudiantesFiltradosAsistencia();
   const listaTachados = obtenerEstudiantesTachadosDelFiltro();
   const valAus = obtenerValorAusenciaActual();
+  const estadoDia = obtenerEstadoDiaActual();
+  const selMod = document.getElementById("asistModalidad");
+  if (selMod) selMod.disabled = (estadoDia !== "NORMAL");
 
-  let p = 0, a = 0, t = 0;
-  let html = "";
+  let p = 0, a = 0, j = 0, t = 0;
 
-  lista.forEach(est => {
-    const estadoAlu = asistenciaActual[est.filaHoja] || "P";
-    if (estadoAlu === "P") p++;
-    else if (estadoAlu === "A") a++;
-    else if (estadoAlu === "T") t++;
-
-    const totalAnual = (est.inasistencias && est.inasistencias.total) ? est.inasistencias.total : 0;
-    let claseBadgeFaltas = "badge-ok";
-    let textoAlerta = `Acum: ${totalAnual}`;
-    if (totalAnual >= 28) { claseBadgeFaltas = "badge-danger"; textoAlerta = `🚨 Acum: ${totalAnual} (Límite 28)`; }
-    else if (totalAnual >= 20) { claseBadgeFaltas = "badge-danger"; textoAlerta = `⚠️ Acum: ${totalAnual}`; }
-
-    html += `
-      <div class="asist-student-row status-${estadoAlu}">
-        <div class="stu-info">
-          <div class="stu-name">${est.orden}. ${est.nombre}</div>
-          <div class="stu-meta">
-            <span class="badge badge-grp">${est.grupo || "Sin grupo"}</span>
-            <span class="badge ${claseBadgeFaltas}">${textoAlerta}</span>
-          </div>
-        </div>
-        <div class="pat-btn-group">
-          <button type="button" class="pat-btn ${estadoAlu === 'P' ? 'active-P' : ''}" onclick="cambiarEstadoAsistencia(${est.filaHoja}, 'P')">P<small>0</small></button>
-          <button type="button" class="pat-btn ${estadoAlu === 'A' ? 'active-A' : ''}" onclick="cambiarEstadoAsistencia(${est.filaHoja}, 'A')">A<small>+${valAus}</small></button>
-          <button type="button" class="pat-btn ${estadoAlu === 'T' ? 'active-T' : ''}" onclick="cambiarEstadoAsistencia(${est.filaHoja}, 'T')">T<small>+0.25</small></button>
-          <button type="button" class="btn-strike-mini" title="Tachar" onclick="alternarEstadoTachado(${est.filaHoja})">🚫</button>
-        </div>
+  if (estadoDia !== "NORMAL") {
+    const etiquetaMotivo = obtenerEtiquetaMotivoDia(estadoDia);
+    cont.innerHTML = `
+      <div class="no-activity-card">
+        <strong>📌 Turno marcado como: ${etiquetaMotivo}</strong>
+        <p>En este estado los estudiantes no asisten y <u>no se computan inasistencias (0.00)</u> en la planilla mensual.<br>
+        Tocá <b>"Guardar Asistencia y Abrir WhatsApp"</b> para dejar registrado el parte del día en el historial.</p>
       </div>
     `;
-  });
+  } else {
+    let html = "";
+    lista.forEach(est => {
+      const estadoAlu = asistenciaActual[est.filaHoja] || "P";
+      if (estadoAlu === "P") p++;
+      else if (estadoAlu === "A") a++;
+      else if (estadoAlu === "J") j++;
+      else if (estadoAlu === "T") t++;
 
-  cont.innerHTML = html || `<p style="padding:12px; color:#64748b;">No hay estudiantes activos.</p>`;
+      const totalAnual = (est.inasistencias && est.inasistencias.total) ? est.inasistencias.total : 0;
+      let claseBadgeFaltas = "badge-ok";
+      let textoAlerta = `Acum: ${totalAnual}`;
+      if (totalAnual >= 28) { claseBadgeFaltas = "badge-danger"; textoAlerta = `🚨 Acum: ${totalAnual} (Límite 28)`; }
+      else if (totalAnual >= 20) { claseBadgeFaltas = "badge-danger"; textoAlerta = `⚠️ Acum: ${totalAnual}`; }
+      else if (totalAnual >= 10) { claseBadgeFaltas = "badge-warn"; textoAlerta = `🔔 Acum: ${totalAnual}`; }
+
+      html += `
+        <div class="asist-student-row status-${estadoAlu}">
+          <div class="stu-info">
+            <div class="stu-name">${est.orden}. ${est.nombre}</div>
+            <div class="stu-meta">
+              <span class="badge badge-grp">${est.grupo || "Sin grupo"}</span>
+              <span class="badge ${claseBadgeFaltas}">${textoAlerta}</span>
+            </div>
+          </div>
+          <div class="pat-btn-group">
+            <button type="button" class="pat-btn ${estadoAlu === 'P' ? 'active-P' : ''}" title="Presente (0)" onclick="cambiarEstadoAsistencia(${est.filaHoja}, 'P')">P<small>0</small></button>
+            <button type="button" class="pat-btn ${estadoAlu === 'A' ? 'active-A' : ''}" title="Ausente (+${valAus})" onclick="cambiarEstadoAsistencia(${est.filaHoja}, 'A')">A<small>+${valAus}</small></button>
+            <button type="button" class="pat-btn ${estadoAlu === 'J' ? 'active-J' : ''}" title="Ausente Justificado (No computa falta)" onclick="cambiarEstadoAsistencia(${est.filaHoja}, 'J')">J<small>0</small></button>
+            <button type="button" class="pat-btn ${estadoAlu === 'T' ? 'active-T' : ''}" title="Tarde (+0.25)" onclick="cambiarEstadoAsistencia(${est.filaHoja}, 'T')">T<small>+0.25</small></button>
+            <button type="button" class="btn-strike-mini" title="Tachar en lista" onclick="alternarEstadoTachado(${est.filaHoja})">🚫</button>
+          </div>
+        </div>
+      `;
+    });
+
+    cont.innerHTML = html || `<p style="padding:12px; color:#64748b;">No hay estudiantes activos.</p>`;
+  }
 
   if (listaTachados.length > 0) {
     let htmlTach = `<div class="tachados-box"><div class="tachados-title"><span>🚫 Tachados (${listaTachados.length})</span></div>`;
@@ -680,6 +749,8 @@ function renderListaAsistencia() {
   document.getElementById("countMat").textContent = lista.length;
   document.getElementById("countP").textContent = p;
   document.getElementById("countA").textContent = a;
+  const elCountJ = document.getElementById("countJ");
+  if (elCountJ) elCountJ.textContent = j;
   document.getElementById("countT").textContent = t;
 
   actualizarVistaPreviaWA();
@@ -691,6 +762,8 @@ function cambiarEstadoAsistencia(filaHoja, nuevoEstado) {
 }
 
 function marcarTodosPresentes() {
+  const selEstDia = document.getElementById("asistEstadoDia");
+  if (selEstDia && selEstDia.value !== "NORMAL") selEstDia.value = "NORMAL";
   obtenerEstudiantesFiltradosAsistencia().forEach(est => { asistenciaActual[est.filaHoja] = "P"; });
   renderListaAsistencia();
 }
@@ -707,30 +780,56 @@ function construirMensajeWhatsApp() {
   const fechaStr = formatearFechaInput();
   const turnoRaw = (document.getElementById("asistTurnoGrupo")?.value || "").split("|")[0];
   const valAus = obtenerValorAusenciaActual();
+  const estadoDia = obtenerEstadoDiaActual();
   const preceptor = document.getElementById("asistPreceptor")?.value.trim() || "Preceptoría";
   const obs = document.getElementById("asistObs")?.value.trim() || "";
   const cursoLimpio = (estado.cursoActual || "").replace(/_/g, " ");
 
-  const ausentes = [], tardes = [];
+  if (estadoDia !== "NORMAL") {
+    const motivoTexto = obtenerEtiquetaMotivoDia(estadoDia);
+    const lineasSinAct = [
+      `📋 *PARTE DIARIO DE ASISTENCIA - EEST N°2*`,
+      `🏫 *Curso:* ${cursoLimpio} | *Turno:* ${turnoRaw}`,
+      `📅 *Fecha:* ${fechaStr}`,
+      ``,
+      `📌 *ESTADO DEL TURNO:* *${motivoTexto.toUpperCase()}*`,
+      `ℹ️ _Sin dictado de clases en este turno. No se computan inasistencias (0.00)._`
+    ];
+    if (obs) lineasSinAct.push(``, `📝 *Observaciones:* ${obs}`);
+    lineasSinAct.push(``, `✍️ *Preceptor/a:* ${preceptor}`);
+    return lineasSinAct.join("\n");
+  }
+
+  const ausentes = [], justificados = [], tardes = [];
   let presentesCount = 0;
 
   lista.forEach(est => {
     const st = asistenciaActual[est.filaHoja] || "P";
     if (st === "P") presentesCount++;
     else if (st === "A") ausentes.push(`• ${formatearEstudianteParaWhatsApp(est)}`);
+    else if (st === "J") justificados.push(`• ${formatearEstudianteParaWhatsApp(est)}`);
     else if (st === "T") tardes.push(`• ${formatearEstudianteParaWhatsApp(est)}`);
   });
+
+  const totalNoAsistieron = ausentes.length + justificados.length;
 
   let lineas = [
     `📋 *PARTE DIARIO DE ASISTENCIA - EEST N°2*`,
     `🏫 *Curso:* ${cursoLimpio} | *Turno:* ${turnoRaw}`,
-    `📅 *Fecha:* ${fechaStr} (Aus: ${valAus} | Tarde: 0.25)`,
+    `📅 *Fecha:* ${fechaStr} (Aus: ${valAus} | Justif: 0 | Tarde: 0.25)`,
     ``,
-    `👥 *En lista:* ${lista.length} | ✅ *Presentes:* ${presentesCount} | ❌ *Ausentes:* ${ausentes.length} | ⏰ *Tardes:* ${tardes.length}`
+    `👥 *En lista:* ${lista.length} | ✅ *Presentes:* ${presentesCount} | ❌ *Ausentes:* ${totalNoAsistieron}${justificados.length > 0 ? ` (${justificados.length} Justif.)` : ""} | ⏰ *Tardes:* ${tardes.length}`
   ];
 
-  if (ausentes.length > 0) lineas.push(``, `❌ *Ausentes (+${valAus}):*`, ...ausentes);
-  else lineas.push(``, `✅ *Sin ausentes en este turno.*`);
+  if (ausentes.length > 0) {
+    lineas.push(``, `❌ *Ausentes (+${valAus}):*`, ...ausentes);
+  }
+  if (justificados.length > 0) {
+    lineas.push(``, `📄 *Ausentes Justificados (0 - No computa):*`, ...justificados);
+  }
+  if (ausentes.length === 0 && justificados.length === 0) {
+    lineas.push(``, `✅ *Sin ausentes en este turno.*`);
+  }
 
   if (tardes.length > 0) lineas.push(``, `⏰ *Llegadas Tarde (+0.25):*`, ...tardes);
   if (obs) lineas.push(``, `📌 *Observaciones:* ${obs}`);
@@ -784,6 +883,8 @@ async function guardarYEnviarWhatsAppBusiness() {
   const lista = obtenerEstudiantesFiltradosAsistencia();
   if (lista.length === 0) return mostrarToast("No hay alumnos activos");
 
+  const estadoDia = obtenerEstadoDiaActual();
+  const motivoDiaTexto = obtenerEtiquetaMotivoDia(estadoDia);
   const mensajeCongelado = construirMensajeWhatsApp();
   const seleccionCongelada = { ...asistenciaActual };
 
@@ -794,6 +895,8 @@ async function guardarYEnviarWhatsAppBusiness() {
     mes: document.getElementById("asistMes").value,
     turnoGrupo: document.getElementById("asistTurnoGrupo").value.split("|")[0],
     modalidadDia: document.getElementById("asistModalidad").value,
+    estadoDia: estadoDia,
+    motivoDiaTexto: motivoDiaTexto,
     preceptor: document.getElementById("asistPreceptor").value.trim(),
     observaciones: document.getElementById("asistObs").value.trim(),
     registros: lista.map(est => ({
@@ -801,7 +904,7 @@ async function guardarYEnviarWhatsAppBusiness() {
       orden: est.orden,
       nombre: est.nombre,
       grupo: est.grupo,
-      estadoAsistencia: seleccionCongelada[est.filaHoja] || "P"
+      estadoAsistencia: (estadoDia === "NORMAL") ? (seleccionCongelada[est.filaHoja] || "P") : "P"
     }))
   };
 
@@ -818,7 +921,7 @@ async function guardarYEnviarWhatsAppBusiness() {
 
     asistenciaActual = seleccionCongelada;
     aplicarDatosRecibidos(json.data, true);
-    mostrarToast("✅ Asistencia guardada");
+    mostrarToast("✅ Parte guardado en Google Sheets");
     abrirWhatsAppBusinessDirecto(mensajeCongelado);
   } catch (err) {
     mostrarToast("⚠️ Error: " + err.message, 4000);
@@ -875,9 +978,11 @@ function renderHistorialAsistencias() {
     return;
   }
 
-  let html = `<table class="app-table"><thead><tr><th>Acción</th><th>Fecha</th><th>Turno</th><th>P</th><th>A</th><th>T</th><th>Ausentes</th></tr></thead><tbody>`;
+  let html = `<table class="app-table"><thead><tr><th>Acción</th><th>Fecha</th><th>Turno</th><th>P</th><th>A / J</th><th>T</th><th>Detalle Ausentes / Estado del Día</th></tr></thead><tbody>`;
   hist.forEach((item, idx) => {
     if (valorActual !== "ALL" && item.turnoGrupo !== valorActual) return;
+    const esSinActividad = (item.estadoDia && item.estadoDia !== "NORMAL") || String(item.nominaAusentes || "").indexOf("[SIN ACTIVIDAD") === 0;
+    const estiloDetalle = esSinActividad ? "color:#b45309; font-weight:800; font-size:11px;" : "font-size:11px;";
     html += `<tr>
       <td><button type="button" class="btn-outline" style="padding:3px 6px; font-size:11px;" onclick="cargarParteDesdeFilaHistorial(${idx})">✏️</button></td>
       <td><strong>${normalizarFechaDDMMYYYY(item.fecha)}</strong></td>
@@ -885,7 +990,7 @@ function renderHistorialAsistencias() {
       <td style="color:#15803d;font-weight:800;">${item.presentes}</td>
       <td style="color:#b91c1c;font-weight:800;">${item.ausentes}</td>
       <td style="color:#b45309;font-weight:800;">${item.tardes}</td>
-      <td class="td-left" style="font-size:11px;">${item.nominaAusentes}</td>
+      <td class="td-left" style="${estiloDetalle}">${item.nominaAusentes}</td>
     </tr>`;
   });
   html += `</tbody></table>`;
@@ -897,26 +1002,17 @@ function limpiarNombreMateria(nombreRaw) {
   return String(nombreRaw || "").replace(/^Materia\s*\d+\s*:\s*/i, "").trim();
 }
 
-/**
- * Crea el selector de notas con las reglas del Régimen Académico:
- * - "final" (Calif. Final): Bloqueado (disabled), cálculo automático.
- * - "int1" (Intensif. 1°C): Solo se habilita y permite seleccionar de 7 a 10 si en cal1 tiene 6 o menos (o está vacío/ausente).
- */
 function crearSelectorNotaHTML(filaHoja, colHoja, valorActual, tipo, claveCampo = "", esResumenTaller = false, objNotasMateria = null) {
   const v = String(valorActual || "").toUpperCase().trim().replace(",", ".");
   const clColor = obtenerClaseColorNota(v);
   const esCampoFinal = (claveCampo === "final");
   const esCampoInt1 = (claveCampo === "int1");
 
-  // Regla para habilitar/deshabilitar Intensificación 1°C:
-  // Solo se habilita si en cal1 tiene 6 o menos (o es vacío / AUS / TEP / TED)
   let int1BloqueadoPorRegla = false;
   if (esCampoInt1 && objNotasMateria) {
     const valC1 = objNotasMateria.cal1;
     const notaNumC1 = parsearNotaNumerica(valC1);
     const valUpC1 = String(valC1 || "").toUpperCase().trim();
-    
-    // Si tiene nota numérica de 7 o más, o es "TEA", se bloquea Intensificación 1°C
     if ((!isNaN(notaNumC1) && notaNumC1 >= 7) || valUpC1 === "TEA") {
       int1BloqueadoPorRegla = true;
     }
@@ -947,7 +1043,6 @@ function crearSelectorNotaHTML(filaHoja, colHoja, valorActual, tipo, claveCampo 
   }
 
   if (esCampoInt1 && !esResumenTaller) {
-    // En Intensificación 1°C permitimos de 7 a 10 si cumple la condición
     const escalaInt1 = ["10", "9", "8", "7"];
     escalaInt1.forEach(n => {
       opts += `<option value="${n}" ${v === n ? "selected" : ""}>${n}</option>`;
@@ -958,7 +1053,6 @@ function crearSelectorNotaHTML(filaHoja, colHoja, valorActual, tipo, claveCampo 
     return `<select class="${clColor}" ${attrDisabled} onchange="guardarCeldaRemota(${filaHoja}, ${colHoja}, this)">${opts}</select>`;
   }
 
-  // Calificaciones de 1°C y 2°C (1 a 10 + AUS)
   for (let n = 10; n >= 1; n--) {
     opts += `<option value="${n}" ${v === String(n) ? "selected" : ""}>${n}</option>`;
   }

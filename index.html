@@ -159,6 +159,18 @@
           </div>
 
           <div class="form-group">
+            <label>📌 Estado del Turno / Día</label>
+            <select id="asistEstadoDia" onchange="alCambiarEstadoDia()">
+              <option value="NORMAL" selected>✅ Clases Normales (Computa asistencia)</option>
+              <option value="SIN_DOCENTES">👩‍🏫 Sin Docentes (No computa inasistencia)</option>
+              <option value="SUSPENSION">⚠️ Suspensión de Clases (No computa inasistencia)</option>
+              <option value="FERIADO">🎌 Feriado / Asueto (No computa inasistencia)</option>
+              <option value="PARO">📢 Paro Docente / Transporte (No computa inasistencia)</option>
+              <option value="JORNADA">📚 Jornada Institucional (No computa inasistencia)</option>
+            </select>
+          </div>
+
+          <div class="form-group">
             <label>Modalidad del Día (Valor de Falta)</label>
             <select id="asistModalidad" onchange="renderListaAsistencia()">
               <option value="DOBLE" selected>Doble Turno: Teoría + Taller/Ed.Fís (Aus = 0.50 | Tarde = 0.25)</option>
@@ -207,6 +219,10 @@
           <div class="pat-stat stat-a">
             <span id="countA">0</span>
             <small>Ausentes (A)</small>
+          </div>
+          <div class="pat-stat stat-j">
+            <span id="countJ">0</span>
+            <small>Justif. (J)</small>
           </div>
           <div class="pat-stat stat-t">
             <span id="countT">0</span>
