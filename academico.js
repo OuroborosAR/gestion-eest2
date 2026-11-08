@@ -190,10 +190,6 @@ function calcularResumenSubModulosTallerCB(valoresTresModulos, esValoracion) {
   return "";
 }
 
-/**
- * Recalcula localmente toda la fila de un estudiante (Calificación Final de la materia editada
- * y, si es Ciclo Básico, la materia resumen TALLER).
- */
 function recalcularNotasEstudianteLocal(est, matEditada, keyEditada) {
   if (!est || !est.notas || !matEditada) return;
   const notasMat = est.notas[matEditada.indice] || {};
@@ -224,7 +220,7 @@ function recalcularNotasEstudianteLocal(est, matEditada, keyEditada) {
         notasResumen[kCal] = calcularResumenSubModulosTallerCB(cals, false);
       });
 
-      // Intensificación 1°C de Taller: si intensificó al menos un submódulo, combina con los ya aprobados en 1°C
+      // Intensificación 1°C de Taller: combina notas intensificadas (>=7) con módulos ya aprobados en 1°C
       const tieneAlgunInt1 = modulosSub.some(m => String((est.notas[m.indice] && est.notas[m.indice].int1) || "").trim() !== "");
       if (tieneAlgunInt1) {
         const calsInt1Efectivas = modulosSub.map(m => {
@@ -901,30 +897,73 @@ function limpiarNombreMateria(nombreRaw) {
   return String(nombreRaw || "").replace(/^Materia\s*\d+\s*:\s*/i, "").trim();
 }
 
-function crearSelectorNotaHTML(filaHoja, colHoja, valorActual, tipo, esCampoFinal = false) {
+/**
+ * Crea el selector de notas con las reglas del Régimen Académico:
+ * - "final" (Calif. Final): Bloqueado (disabled), cálculo automático.
+ * - "int1" (Intensif. 1°C): Solo se habilita y permite seleccionar de 7 a 10 si en cal1 tiene 6 o menos (o está vacío/ausente).
+ */
+function crearSelectorNotaHTML(filaHoja, colHoja, valorActual, tipo, claveCampo = "", esResumenTaller = false, objNotasMateria = null) {
   const v = String(valorActual || "").toUpperCase().trim().replace(",", ".");
   const clColor = obtenerClaseColorNota(v);
+  const esCampoFinal = (claveCampo === "final");
+  const esCampoInt1 = (claveCampo === "int1");
+
+  // Regla para habilitar/deshabilitar Intensificación 1°C:
+  // Solo se habilita si en cal1 tiene 6 o menos (o es vacío / AUS / TEP / TED)
+  let int1BloqueadoPorRegla = false;
+  if (esCampoInt1 && objNotasMateria) {
+    const valC1 = objNotasMateria.cal1;
+    const notaNumC1 = parsearNotaNumerica(valC1);
+    const valUpC1 = String(valC1 || "").toUpperCase().trim();
+    
+    // Si tiene nota numérica de 7 o más, o es "TEA", se bloquea Intensificación 1°C
+    if ((!isNaN(notaNumC1) && notaNumC1 >= 7) || valUpC1 === "TEA") {
+      int1BloqueadoPorRegla = true;
+    }
+  }
+
+  const estaBloqueado = esCampoFinal || esResumenTaller || int1BloqueadoPorRegla;
+
+  const attrDisabled = estaBloqueado
+    ? `disabled style="cursor:not-allowed; opacity:0.85;" title="${esCampoInt1 && int1BloqueadoPorRegla ? 'Solo disponible si el 1° Cuatrimestre es 6 o menos' : 'Se calcula automáticamente'}"`
+    : "";
 
   if (tipo === "val") {
-    return `<select class="${clColor}" onchange="guardarCeldaRemota(${filaHoja}, ${colHoja}, this)">
+    return `<select class="${clColor}" ${attrDisabled} onchange="guardarCeldaRemota(${filaHoja}, ${colHoja}, this)">
       <option value="" ${v === "" ? "selected" : ""}>-</option>
       <option value="TEA" ${v === "TEA" ? "selected" : ""}>TEA</option>
       <option value="TEP" ${v === "TEP" ? "selected" : ""}>TEP</option>
       <option value="TED" ${v === "TED" ? "selected" : ""}>TED</option>
     </select>`;
-  } else {
-    let opts = `<option value="" ${v === "" ? "selected" : ""}>-</option>`;
-    // En Calificación Final permitimos medios puntos de promedio (9.5, 8.5, 7.5)
-    const escala = esCampoFinal
-      ? ["10", "9.5", "9", "8.5", "8", "7.5", "7", "6", "5", "4", "3", "2", "1"]
-      : ["10", "9", "8", "7", "6", "5", "4", "3", "2", "1"];
+  }
 
-    escala.forEach(n => {
+  let opts = `<option value="" ${v === "" ? "selected" : ""}>-</option>`;
+
+  if (esCampoFinal) {
+    if (v !== "") {
+      opts += `<option value="${v}" selected>${v}</option>`;
+    }
+    return `<select class="${clColor}" ${attrDisabled}>${opts}</select>`;
+  }
+
+  if (esCampoInt1 && !esResumenTaller) {
+    // En Intensificación 1°C permitimos de 7 a 10 si cumple la condición
+    const escalaInt1 = ["10", "9", "8", "7"];
+    escalaInt1.forEach(n => {
       opts += `<option value="${n}" ${v === n ? "selected" : ""}>${n}</option>`;
     });
-    opts += `<option value="AUS" ${v === "AUS" ? "selected" : ""}>AUS</option>`;
-    return `<select class="${clColor}" onchange="guardarCeldaRemota(${filaHoja}, ${colHoja}, this)">${opts}</select>`;
+    if (v !== "" && !escalaInt1.includes(v)) {
+      opts += `<option value="${v}" selected>${v}</option>`;
+    }
+    return `<select class="${clColor}" ${attrDisabled} onchange="guardarCeldaRemota(${filaHoja}, ${colHoja}, this)">${opts}</select>`;
   }
+
+  // Calificaciones de 1°C y 2°C (1 a 10 + AUS)
+  for (let n = 10; n >= 1; n--) {
+    opts += `<option value="${n}" ${v === String(n) ? "selected" : ""}>${n}</option>`;
+  }
+  opts += `<option value="AUS" ${v === "AUS" ? "selected" : ""}>AUS</option>`;
+  return `<select class="${clColor}" ${attrDisabled} onchange="guardarCeldaRemota(${filaHoja}, ${colHoja}, this)">${opts}</select>`;
 }
 
 function renderVistaMateria() {
@@ -951,7 +990,7 @@ function renderVistaMateria() {
     if (tachado && !mostrarTachados) return;
 
     const notasMat = (est.notas && est.notas[mat.indice]) || {};
-    const esResumenTaller = mat.esResumenTallerCB;
+    const esResumenTaller = Boolean(mat.esResumenTallerCB);
 
     html += `<div class="grade-card ${tachado ? 'card-tachada' : ''} ${esResumenTaller ? 'resumen-taller-card' : ''}">
       <div style="display:flex; justify-content:space-between; align-items:center; gap:6px; flex-wrap:wrap;">
@@ -970,11 +1009,10 @@ function renderVistaMateria() {
 
     SUB_CAMPOS.forEach(sc => {
       const colHoja = mat.columnaInicio + sc.offset;
-      const esFinal = (sc.key === "final");
-      const deshabilitado = esResumenTaller ? 'disabled title="Calculado automáticamente por la ponderación de Procedimientos, Lenguajes y Sistemas"' : '';
+      const etiquetaCampo = (sc.key === "final") ? `${sc.label} (Auto)` : sc.label;
       html += `<div class="mini-field">
-        <label>${sc.label}</label>
-        <div ${deshabilitado}>${crearSelectorNotaHTML(est.filaHoja, colHoja, notasMat[sc.key], sc.tipo, esFinal)}</div>
+        <label>${etiquetaCampo}</label>
+        <div>${crearSelectorNotaHTML(est.filaHoja, colHoja, notasMat[sc.key], sc.tipo, sc.key, esResumenTaller, notasMat)}</div>
       </div>`;
     });
     html += `</div></div>`;
@@ -1270,7 +1308,7 @@ function renderVistaAlumno() {
     }
 
     const notasMat = (est.notas && est.notas[mat.indice]) || {};
-    const esResumenTaller = mat.esResumenTallerCB;
+    const esResumenTaller = Boolean(mat.esResumenTallerCB);
 
     html += `<div class="grade-card ${esResumenTaller ? 'resumen-taller-card' : ''}">
       <div style="display:flex; justify-content:space-between; align-items:center; gap:6px; flex-wrap:wrap;">
@@ -1280,9 +1318,8 @@ function renderVistaAlumno() {
       <div class="grade-inputs-grid">`;
     SUB_CAMPOS.forEach(sc => {
       const colHoja = mat.columnaInicio + sc.offset;
-      const esFinal = (sc.key === "final");
-      const deshabilitado = esResumenTaller ? 'disabled' : '';
-      html += `<div class="mini-field"><label>${sc.label}</label><div ${deshabilitado}>${crearSelectorNotaHTML(est.filaHoja, colHoja, notasMat[sc.key], sc.tipo, esFinal)}</div></div>`;
+      const etiquetaCampo = (sc.key === "final") ? `${sc.label} (Auto)` : sc.label;
+      html += `<div class="mini-field"><label>${etiquetaCampo}</label><div>${crearSelectorNotaHTML(est.filaHoja, colHoja, notasMat[sc.key], sc.tipo, sc.key, esResumenTaller, notasMat)}</div></div>`;
     });
     html += `</div></div>`;
   });
