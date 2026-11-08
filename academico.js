@@ -105,6 +105,146 @@ function alternarTipoMateriaTallerTeoria(indiceMat) {
   mostrarToast(`🔄 "${mat.nombre}" pasada a ${mapaManual[clave] === "TALLER" ? "🔧 Taller" : "📘 Teoría"}`);
 }
 
+/* ==================== LÓGICA DE PROMEDIOS Y PONDERACIÓN (RÉGIMEN ACADÉMICO) ==================== */
+
+function parsearNotaNumerica(val) {
+  if (val === undefined || val === null) return NaN;
+  const str = String(val).trim().replace(",", ".");
+  if (!str || str.toUpperCase() === "AUS") return NaN;
+  const n = parseFloat(str);
+  return (!isNaN(n) && n >= 1 && n <= 10) ? n : NaN;
+}
+
+/**
+ * Calcula la Calificación Final de una materia:
+ * - Promedia 1°C y 2°C solo si ambos están aprobados (>= 7).
+ * - Si en Intensificación 1°C (int1) obtuvo >= 7, utiliza esa nota para promediar con el 2°C.
+ * - Devuelve decimales .5 cuando corresponde (ej: 7 y 10 -> "8.5").
+ */
+function calcularCalificacionFinalMateria(objNotas) {
+  if (!objNotas) return "";
+  const c1 = parsearNotaNumerica(objNotas.cal1);
+  const c2 = parsearNotaNumerica(objNotas.cal2);
+  const i1 = parsearNotaNumerica(objNotas.int1);
+
+  let notaEfectiva1C = NaN;
+  if (!isNaN(i1) && i1 >= 7) {
+    notaEfectiva1C = (!isNaN(c1) && c1 >= 7) ? Math.max(c1, i1) : i1;
+  } else if (!isNaN(c1) && c1 >= 7) {
+    notaEfectiva1C = c1;
+  }
+
+  if (!isNaN(notaEfectiva1C) && notaEfectiva1C >= 7 && !isNaN(c2) && c2 >= 7) {
+    const prom = Math.round(((notaEfectiva1C + c2) / 2) * 2) / 2;
+    return String(prom);
+  }
+  return "";
+}
+
+/**
+ * Calcula el valor de TALLER (Calificación General) en Ciclo Básico a partir de las 3 materias de taller:
+ * - Valoraciones: 3 TEA -> TEA | Al menos un TED -> TED | Al menos un TEP -> TEP.
+ * - Calificaciones: Si hay alguna < 7, queda la más alta de 6 hacia abajo.
+ *   Si las 3 son >= 7, pondera a entero (.66 sube, .33 baja).
+ */
+function calcularResumenSubModulosTallerCB(valoresTresModulos, esValoracion) {
+  const limpios = (valoresTresModulos || [])
+    .map(v => String(v === undefined || v === null ? "" : v).trim().toUpperCase())
+    .filter(Boolean);
+
+  if (limpios.length === 0) return "";
+
+  if (esValoracion) {
+    if (limpios.includes("TED")) return "TED";
+    if (limpios.includes("TEP")) return "TEP";
+    if (limpios.length === 3 && limpios.every(v => v === "TEA")) return "TEA";
+    return "";
+  }
+
+  const numeros = [];
+  let tieneAus = false;
+
+  limpios.forEach(v => {
+    if (v === "AUS") {
+      tieneAus = true;
+    } else {
+      const n = parsearNotaNumerica(v);
+      if (!isNaN(n)) numeros.push(n);
+    }
+  });
+
+  // Si alguna calificación es menor a 7, queda el valor más alto de 6 hacia abajo
+  const desaprobadas = numeros.filter(n => n < 7);
+  if (desaprobadas.length > 0) {
+    return String(Math.max(...desaprobadas));
+  }
+
+  if (tieneAus) return "AUS";
+
+  // Si las 3 calificaciones son de 7 para arriba, pondera (.66 hacia arriba, .33 hacia abajo)
+  if (numeros.length === 3 && numeros.every(n => n >= 7)) {
+    const suma = numeros[0] + numeros[1] + numeros[2];
+    return String(Math.round(suma / 3));
+  }
+
+  return "";
+}
+
+/**
+ * Recalcula localmente toda la fila de un estudiante (Calificación Final de la materia editada
+ * y, si es Ciclo Básico, la materia resumen TALLER).
+ */
+function recalcularNotasEstudianteLocal(est, matEditada, keyEditada) {
+  if (!est || !est.notas || !matEditada) return;
+  const notasMat = est.notas[matEditada.indice] || {};
+
+  // 1. Si se editó cal1, cal2 o int1 de una materia, recalcular su Calificación Final
+  if (["cal1", "cal2", "int1"].includes(keyEditada)) {
+    notasMat.final = calcularCalificacionFinalMateria(notasMat);
+  }
+
+  // 2. Si es un submódulo de Taller de Ciclo Básico, recalcular TALLER (Calificación General)
+  if (matEditada.esSubTallerCB) {
+    const modulosSub = (estado.materias || []).filter(m => m.esSubTallerCB).slice(0, 3);
+    const matResumen = (estado.materias || []).find(m => m.esResumenTallerCB);
+
+    if (modulosSub.length === 3 && matResumen) {
+      if (!est.notas[matResumen.indice]) est.notas[matResumen.indice] = {};
+      const notasResumen = est.notas[matResumen.indice];
+
+      // Valoraciones 1°C y 2°C
+      ["val1", "val2"].forEach(kVal => {
+        const vals = modulosSub.map(m => (est.notas[m.indice] && est.notas[m.indice][kVal]) || "");
+        notasResumen[kVal] = calcularResumenSubModulosTallerCB(vals, true);
+      });
+
+      // Calificaciones 1°C y 2°C
+      ["cal1", "cal2"].forEach(kCal => {
+        const cals = modulosSub.map(m => (est.notas[m.indice] && est.notas[m.indice][kCal]) || "");
+        notasResumen[kCal] = calcularResumenSubModulosTallerCB(cals, false);
+      });
+
+      // Intensificación 1°C de Taller: si intensificó al menos un submódulo, combina con los ya aprobados en 1°C
+      const tieneAlgunInt1 = modulosSub.some(m => String((est.notas[m.indice] && est.notas[m.indice].int1) || "").trim() !== "");
+      if (tieneAlgunInt1) {
+        const calsInt1Efectivas = modulosSub.map(m => {
+          const nM = est.notas[m.indice] || {};
+          const vInt = String(nM.int1 || "").trim();
+          if (vInt !== "") return vInt;
+          const nCal1 = parsearNotaNumerica(nM.cal1);
+          return (!isNaN(nCal1) && nCal1 >= 7) ? String(nM.cal1) : "";
+        });
+        notasResumen.int1 = calcularResumenSubModulosTallerCB(calsInt1Efectivas, false);
+      } else {
+        notasResumen.int1 = "";
+      }
+
+      // Calificación Final de Taller General
+      notasResumen.final = calcularCalificacionFinalMateria(notasResumen);
+    }
+  }
+}
+
 /* ==================== COLORES DE VALORACIONES Y CALIFICACIONES NUMÉRICAS ==================== */
 function obtenerClaseColorNota(valor) {
   const v = String(valor === undefined || valor === null ? "" : valor).trim().toUpperCase();
@@ -118,7 +258,7 @@ function obtenerClaseColorNota(valor) {
   const num = parseFloat(v.replace(",", "."));
   if (!isNaN(num)) {
     if (num >= 1 && num <= 3) return "cal-rojo";
-    if (num >= 4 && num <= 6) return "cal-verde";
+    if (num >= 4 && num < 7) return "cal-verde";
     if (num >= 7 && num <= 10) return "cal-azul";
   }
   return "";
@@ -607,7 +747,6 @@ function actualizarVistaPreviaWA() {
   if (box) box.textContent = construirMensajeWhatsApp();
 }
 
-// Abre WhatsApp Personal (com.whatsapp) o WhatsApp Business (com.whatsapp.w4b) según la preferencia seleccionada
 function abrirWhatsAppBusinessDirecto(textoForzado, telefonoOpcional) {
   const texto = textoForzado || construirMensajeWhatsApp();
   const encoded = encodeURIComponent(texto);
@@ -762,8 +901,8 @@ function limpiarNombreMateria(nombreRaw) {
   return String(nombreRaw || "").replace(/^Materia\s*\d+\s*:\s*/i, "").trim();
 }
 
-function crearSelectorNotaHTML(filaHoja, colHoja, valorActual, tipo) {
-  const v = String(valorActual || "").toUpperCase().trim();
+function crearSelectorNotaHTML(filaHoja, colHoja, valorActual, tipo, esCampoFinal = false) {
+  const v = String(valorActual || "").toUpperCase().trim().replace(",", ".");
   const clColor = obtenerClaseColorNota(v);
 
   if (tipo === "val") {
@@ -775,7 +914,14 @@ function crearSelectorNotaHTML(filaHoja, colHoja, valorActual, tipo) {
     </select>`;
   } else {
     let opts = `<option value="" ${v === "" ? "selected" : ""}>-</option>`;
-    for (let n = 10; n >= 1; n--) opts += `<option value="${n}" ${v === String(n) ? "selected" : ""}>${n}</option>`;
+    // En Calificación Final permitimos medios puntos de promedio (9.5, 8.5, 7.5)
+    const escala = esCampoFinal
+      ? ["10", "9.5", "9", "8.5", "8", "7.5", "7", "6", "5", "4", "3", "2", "1"]
+      : ["10", "9", "8", "7", "6", "5", "4", "3", "2", "1"];
+
+    escala.forEach(n => {
+      opts += `<option value="${n}" ${v === n ? "selected" : ""}>${n}</option>`;
+    });
     opts += `<option value="AUS" ${v === "AUS" ? "selected" : ""}>AUS</option>`;
     return `<select class="${clColor}" onchange="guardarCeldaRemota(${filaHoja}, ${colHoja}, this)">${opts}</select>`;
   }
@@ -824,10 +970,11 @@ function renderVistaMateria() {
 
     SUB_CAMPOS.forEach(sc => {
       const colHoja = mat.columnaInicio + sc.offset;
-      const deshabilitado = esResumenTaller ? 'disabled title="Calculado automáticamente por el promedio de Procedimientos, Lenguajes y Sistemas"' : '';
+      const esFinal = (sc.key === "final");
+      const deshabilitado = esResumenTaller ? 'disabled title="Calculado automáticamente por la ponderación de Procedimientos, Lenguajes y Sistemas"' : '';
       html += `<div class="mini-field">
         <label>${sc.label}</label>
-        <div ${deshabilitado}>${crearSelectorNotaHTML(est.filaHoja, colHoja, notasMat[sc.key], sc.tipo)}</div>
+        <div ${deshabilitado}>${crearSelectorNotaHTML(est.filaHoja, colHoja, notasMat[sc.key], sc.tipo, esFinal)}</div>
       </div>`;
     });
     html += `</div></div>`;
@@ -886,7 +1033,6 @@ function combinarFechasDetectadasYExtra(listaAuto, textoExtra) {
   return combinadas;
 }
 
-// Mensaje individual con N° de Orden y cierre "Se solicita confirmar recepción del mensaje"
 function construirMensajeWhatsAppAlumno(est) {
   if (!est) return "";
   const hoy = new Date();
@@ -1134,8 +1280,9 @@ function renderVistaAlumno() {
       <div class="grade-inputs-grid">`;
     SUB_CAMPOS.forEach(sc => {
       const colHoja = mat.columnaInicio + sc.offset;
+      const esFinal = (sc.key === "final");
       const deshabilitado = esResumenTaller ? 'disabled' : '';
-      html += `<div class="mini-field"><label>${sc.label}</label><div ${deshabilitado}>${crearSelectorNotaHTML(est.filaHoja, colHoja, notasMat[sc.key], sc.tipo)}</div></div>`;
+      html += `<div class="mini-field"><label>${sc.label}</label><div ${deshabilitado}>${crearSelectorNotaHTML(est.filaHoja, colHoja, notasMat[sc.key], sc.tipo, esFinal)}</div></div>`;
     });
     html += `</div></div>`;
   });
@@ -1187,17 +1334,27 @@ async function guardarCeldaRemota(filaHoja, columnaHoja, selectElem) {
   selectElem.className = obtenerClaseColorNota(val);
 
   const aluLocal = (estado.estudiantes || []).find(e => e.filaHoja === Number(filaHoja));
+  let matTocada = null;
+  let scTocado = null;
+
   if (aluLocal && aluLocal.notas) {
     (estado.materias || []).forEach(m => {
       SUB_CAMPOS.forEach(sc => {
         if (m.columnaInicio + sc.offset === Number(columnaHoja)) {
           if (!aluLocal.notas[m.indice]) aluLocal.notas[m.indice] = {};
           aluLocal.notas[m.indice][sc.key] = val;
+          matTocada = m;
+          scTocado = sc;
         }
       });
     });
-    const boxWA = document.getElementById("waAlumnoPreviewBox");
-    if (boxWA) boxWA.textContent = construirMensajeWhatsAppAlumno(aluLocal);
+
+    if (matTocada && scTocado) {
+      recalcularNotasEstudianteLocal(aluLocal, matTocada, scTocado.key);
+    }
+
+    renderVistaMateria();
+    renderVistaAlumno();
     renderTablaCompleta();
   }
 
@@ -1210,22 +1367,11 @@ async function guardarCeldaRemota(filaHoja, columnaHoja, selectElem) {
     const json = await resp.json();
     if (!json.ok) throw new Error(json.error);
 
-    if (json.resultado && json.resultado.resumenTaller) {
-      const resTaller = json.resultado.resumenTaller;
-      if (aluLocal && aluLocal.notas && aluLocal.notas[resTaller.indiceMateriaResumen]) {
-        const colRelativa = resTaller.columnaResumen;
-        estado.materias.forEach(m => {
-          if (m.indice === resTaller.indiceMateriaResumen) {
-            const offset = colRelativa - m.columnaInicio;
-            const scEncontrado = SUB_CAMPOS.find(s => s.offset === offset);
-            if (scEncontrado) {
-              aluLocal.notas[m.indice][scEncontrado.key] = resTaller.valorResumen;
-            }
-          }
-        });
-        renderVistaAlumno();
-        renderTablaCompleta();
-      }
+    if (json.resultado && json.resultado.notasActualizadasFila && aluLocal) {
+      aluLocal.notas = json.resultado.notasActualizadasFila;
+      renderVistaMateria();
+      renderVistaAlumno();
+      renderTablaCompleta();
     }
     mostrarToast("✅ Guardado");
   } catch (err) {
