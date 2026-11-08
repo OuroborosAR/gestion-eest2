@@ -11,16 +11,18 @@
   <meta name="apple-mobile-web-app-title" content="EEST N°2 Gestión">
   <meta name="theme-color" content="#1e3a8a">
   <link rel="apple-touch-icon" href="logo.png">
-  <!-- Enlace a la hoja de estilos modular -->
-  <link rel="stylesheet" href="styles.css">
+  
+  <!-- Enlaces de PWA y Estilos -->
   <link rel="manifest" href="manifest.json">
-<script>
-  if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => {
-      navigator.serviceWorker.register('sw.js').catch(err => console.log('SW error:', err));
-    });
-  }
-</script>
+  <link rel="stylesheet" href="styles.css">
+
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('sw.js').catch(err => console.log('SW error:', err));
+      });
+    }
+  </script>
 </head>
 <body>
 
