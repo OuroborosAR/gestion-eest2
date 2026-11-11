@@ -55,10 +55,8 @@ let sesionAuth = {
   clave: localStorage.getItem("eest2_auth_pass") || ""
 };
 
-// Preferencia entre WhatsApp Business ("W4B") y WhatsApp Personal ("PERSONAL")
 let preferenciaAppWA = localStorage.getItem("eest2_tipo_app_wa") || "W4B";
 
-// Interceptor automático de fetch para enviar credenciales en toda petición GET y POST
 const nativeFetch = window.fetch.bind(window);
 window.fetch = async function(input, init) {
   let url = typeof input === "string" ? input : input.url;
@@ -238,7 +236,6 @@ function esAdminODirectivoActual() {
   return r === "ADMIN" || r === "DIRECTIVO";
 }
 
-// --- GESTIÓN DE USUARIOS (SOLO ADMIN Y DIRECTIVO) ---
 function abrirModalGestionUsuarios() {
   limpiarFormularioGestionUsuario();
   renderizarTablaUsuariosSistema();
@@ -409,7 +406,6 @@ async function cambiarMiPropiaClavePrompt() {
   }
 }
 
-// --- INSTALACIÓN PWA EN CELULAR ---
 window.addEventListener("beforeinstallprompt", (e) => {
   e.preventDefault();
   deferredPrompt = e;
@@ -431,7 +427,6 @@ function instalarPWA() {
   }
 }
 
-// --- GESTIÓN DE CURSOS, LOTES DE ALUMNOS Y HORARIOS ---
 function abrirModalSelectorCurso(directoACrear = false) {
   renderTarjetasCursosEnModal();
   mostrarFormularioNuevoCurso(directoACrear);
@@ -532,17 +527,19 @@ async function ejecutarCreacionNuevoCurso() {
   const materias = matTexto ? matTexto.split(",").map(s => s.trim()).filter(Boolean) : [];
 
   const estTexto = document.getElementById("ncListaEstudiantes").value.trim();
-  const estudiantesIniciales = [];
+  const mapaUnicos = new Map();
   if (estTexto) {
-    estTexto.split(/\r?\n/).forEach((linea, idx) => {
+    estTexto.split(/\r?\n/).forEach(linea => {
       const limp = linea.trim();
       if (!limp) return;
       const partes = limp.split("|");
-      const nombreAlu = (partes[0] || "").trim().toUpperCase();
+      const nombreAlu = (partes[0] || "").replace(/^\d+[\.\-\)]\s*/, "").trim().toUpperCase();
       const grupoAlu = (partes[1] || "Grupo 1").trim();
       if (nombreAlu) {
-        estudiantesIniciales.push({
-          orden: idx + 1,
+        const clave = typeof normalizarClaveNombreAlumno === "function"
+          ? normalizarClaveNombreAlumno(nombreAlu)
+          : nombreAlu;
+        mapaUnicos.set(clave, {
           nombre: nombreAlu,
           grupo: grupoAlu,
           estado: "Activo"
@@ -550,6 +547,12 @@ async function ejecutarCreacionNuevoCurso() {
       }
     });
   }
+  const estudiantesIniciales = Array.from(mapaUnicos.values()).map((item, idx) => ({
+    orden: idx + 1,
+    nombre: item.nombre,
+    grupo: item.grupo,
+    estado: item.estado
+  }));
 
   const btn = document.getElementById("btnConfirmarCrearCurso");
   try {
@@ -606,32 +609,164 @@ async function ejecutarCargaMasivaAlumnos() {
     return;
   }
 
-  const lista = [];
+  const normalizar = (typeof normalizarClaveNombreAlumno === "function")
+    ? normalizarClaveNombreAlumno
+    : (s => String(s || "").trim().toUpperCase());
+
+  // 1. Deduplicar dentro del mismo lote pegado (si se repitió el mismo nombre, prevalece el último)
+  const lotePorClave = new Map();
   texto.split(/\r?\n/).forEach(linea => {
     const l = linea.trim();
     if (!l) return;
     const partes = l.split("|");
-    const nom = (partes[0] || "").replace(/^\d+[\.\-\)]\s*/, "").trim().toUpperCase();
+    const rawPrimero = (partes[0] || "").trim();
+    const matchOrdenExplicito = rawPrimero.match(/^(\d+)[\.\-\)]\s*(.+)$/);
+    const ordenExplicito = matchOrdenExplicito ? parseInt(matchOrdenExplicito[1], 10) : null;
+    const nom = (matchOrdenExplicito ? matchOrdenExplicito[2] : rawPrimero)
+      .replace(/\s+/g, " ")
+      .trim()
+      .toUpperCase();
     const grp = (partes[1] || grpDef).trim();
-    if (nom) lista.push({ nombre: nom, grupo: grp, estado: "Activo" });
+
+    if (nom) {
+      const clave = normalizar(nom);
+      if (clave) {
+        lotePorClave.set(clave, {
+          orden: ordenExplicito,
+          nombre: nom,
+          grupo: grp,
+          estado: "Activo"
+        });
+      }
+    }
+  });
+
+  if (lotePorClave.size === 0) {
+    mostrarToast("⚠️ No se detectaron nombres válidos");
+    return;
+  }
+
+  // 2. Separar entre estudiantes que YA existen en el curso (se reescriben) y estudiantes nuevos
+  const mapaExistentes = new Map();
+  (estado.estudiantes || []).forEach(est => {
+    const c = normalizar(est.nombre);
+    if (c && !mapaExistentes.has(c)) {
+      mapaExistentes.set(c, est);
+    }
+  });
+
+  const existentesAActualizar = [];
+  const nuevosAAgregar = [];
+  let siguienteOrden = (typeof obtenerSiguienteNumeroOrden === "function")
+    ? obtenerSiguienteNumeroOrden()
+    : ((estado.estudiantes || []).length + 1);
+
+  lotePorClave.forEach((item, clave) => {
+    const estExistente = mapaExistentes.get(clave);
+    if (estExistente) {
+      existentesAActualizar.push({
+        estRef: estExistente,
+        filaHoja: estExistente.filaHoja,
+        orden: item.orden || estExistente.orden,
+        nombre: item.nombre,
+        grupo: item.grupo,
+        estado: "Activo"
+      });
+    } else {
+      nuevosAAgregar.push({
+        orden: item.orden || siguienteOrden++,
+        nombre: item.nombre,
+        grupo: item.grupo,
+        estado: "Activo"
+      });
+    }
   });
 
   try {
-    const resp = await fetch(scriptUrl, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({
-        accion: "agregarEstudiantesLote",
-        curso: estado.cursoActual,
-        estudiantes: lista
-      })
-    });
-    const json = await resp.json();
-    if (!json.ok) throw new Error(json.error);
+    mostrarToast("⏳ Procesando lote sin duplicar...");
 
-    aplicarDatosRecibidos(json.data, false);
+    // Reescribir los estudiantes que ya existían en la lista
+    for (const itemUpd of existentesAActualizar) {
+      if (String(itemUpd.estRef.orden) !== String(itemUpd.orden)) {
+        await fetch(scriptUrl, {
+          method: "POST",
+          headers: { "Content-Type": "text/plain;charset=utf-8" },
+          body: JSON.stringify({
+            accion: "actualizarCelda",
+            curso: estado.cursoActual,
+            filaHoja: itemUpd.filaHoja,
+            columnaHoja: 1,
+            valor: itemUpd.orden
+          })
+        });
+      }
+      await fetch(scriptUrl, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({
+          accion: "actualizarCelda",
+          curso: estado.cursoActual,
+          filaHoja: itemUpd.filaHoja,
+          columnaHoja: 2,
+          valor: itemUpd.nombre
+        })
+      });
+      await fetch(scriptUrl, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({
+          accion: "actualizarCelda",
+          curso: estado.cursoActual,
+          filaHoja: itemUpd.filaHoja,
+          columnaHoja: 3,
+          valor: itemUpd.grupo
+        })
+      });
+      if (esEstudianteTachado(itemUpd.estRef)) {
+        await fetch(scriptUrl, {
+          method: "POST",
+          headers: { "Content-Type": "text/plain;charset=utf-8" },
+          body: JSON.stringify({
+            accion: "actualizarCelda",
+            curso: estado.cursoActual,
+            filaHoja: itemUpd.filaHoja,
+            columnaHoja: 4,
+            valor: "Activo"
+          })
+        });
+      }
+      itemUpd.estRef.orden = itemUpd.orden;
+      itemUpd.estRef.nombre = itemUpd.nombre;
+      itemUpd.estRef.grupo = itemUpd.grupo;
+      itemUpd.estRef.estado = "Activo";
+    }
+
+    // Agregar únicamente los estudiantes nuevos
+    if (nuevosAAgregar.length > 0) {
+      const resp = await fetch(scriptUrl, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({
+          accion: "agregarEstudiantesLote",
+          curso: estado.cursoActual,
+          estudiantes: nuevosAAgregar
+        })
+      });
+      const json = await resp.json();
+      if (!json.ok) throw new Error(json.error);
+      aplicarDatosRecibidos(json.data, false);
+    } else {
+      if (typeof ordenarEstudiantesPorNumero === "function") {
+        ordenarEstudiantesPorNumero(estado.estudiantes);
+      }
+      aplicarDatosRecibidos(estado, true);
+    }
+
     cerrarModalCargaMasivaAlumnos();
-    mostrarToast(`✅ ${lista.length} estudiantes agregados`);
+    mostrarToast(
+      `✅ ${nuevosAAgregar.length} nuevos agregados | ${existentesAActualizar.length} existentes reescritos (sin duplicar)`,
+      4000
+    );
   } catch (err) {
     mostrarToast("⚠️ Error: " + err.message, 4000);
   }
@@ -765,7 +900,6 @@ async function guardarHorarioEnGoogleSheet() {
   }
 }
 
-// --- UTILIDADES DE NAVEGACIÓN Y SINCRONIZACIÓN ---
 function mostrarToast(msg, duracion = 2800) {
   const t = document.getElementById("toast");
   if (!t) return;
@@ -826,6 +960,10 @@ function aplicarDatosRecibidos(data, preservarSeleccionPantalla = false) {
   const copiaAsistenciaPrevia = { ...asistenciaActual };
   const alumnoSelPrevio = document.getElementById("alumnoSelect")?.value || "";
   const materiaSelPrevia = document.getElementById("materiaSelect")?.value || "";
+
+  if (data && Array.isArray(data.estudiantes) && typeof ordenarEstudiantesPorNumero === "function") {
+    ordenarEstudiantesPorNumero(data.estudiantes);
+  }
 
   estado = data;
 

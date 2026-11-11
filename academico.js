@@ -1,3 +1,33 @@
+/* ==================== UTILIDADES DE NORMALIZACIÓN Y ORDEN DE MATRÍCULA ==================== */
+function normalizarClaveNombreAlumno(nombreRaw) {
+  return String(nombreRaw || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/^\d+[\.\-\)]\s*/, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toUpperCase();
+}
+
+function ordenarEstudiantesPorNumero(lista) {
+  if (!Array.isArray(lista)) return [];
+  return lista.sort((a, b) => {
+    const na = parseInt(a.orden, 10);
+    const nb = parseInt(b.orden, 10);
+    if (!isNaN(na) && !isNaN(nb) && na !== nb) return na - nb;
+    if (!isNaN(na) && isNaN(nb)) return -1;
+    if (isNaN(na) && !isNaN(nb)) return 1;
+    return String(a.nombre || "").localeCompare(String(b.nombre || ""), "es");
+  });
+}
+
+function obtenerSiguienteNumeroOrden() {
+  const ordenes = (estado.estudiantes || [])
+    .map(e => parseInt(e.orden, 10))
+    .filter(n => !isNaN(n) && n > 0);
+  return ordenes.length > 0 ? Math.max(...ordenes) + 1 : 1;
+}
+
 /* ==================== CLASIFICACIÓN Y ORDENAMIENTO VISUAL DE MATERIAS ==================== */
 function obtenerMapaTiposMateriasLocal() {
   try {
@@ -437,7 +467,6 @@ function cargarParteGuardadoSiExiste() {
     return false;
   }
 
-  // Restaurar modalidad del día según el valor de ausencia guardado si corresponde
   const selMod = document.getElementById("asistModalidad");
   if (selMod && registroExistente.valorAusencia) {
     const vAus = Number(registroExistente.valorAusencia);
@@ -446,7 +475,6 @@ function cargarParteGuardadoSiExiste() {
     else if (vAus === 0.5) selMod.value = "DOBLE";
   }
 
-  // Detectar si el registro corresponde a un día sin actividad
   let estDiaGuardado = registroExistente.estadoDia || "NORMAL";
   const textoAus = String(registroExistente.nominaAusentes || "");
   if (estDiaGuardado === "NORMAL" && textoAus.indexOf("[SIN ACTIVIDAD:") === 0) {
@@ -541,6 +569,8 @@ function guardarPreceptorLocal() {
   actualizarVistaPreviaWA();
 }
 
+/* ==================== GESTIÓN DE ESTUDIANTES: ORDEN, EDICIÓN, RENUMERACIÓN Y DEDUPLICACIÓN ==================== */
+
 async function alternarEstadoTachado(filaHoja) {
   const est = (estado.estudiantes || []).find(e => e.filaHoja === Number(filaHoja));
   if (!est) return;
@@ -574,18 +604,60 @@ async function editarDatosEstudiante(filaHoja) {
   const est = (estado.estudiantes || []).find(e => e.filaHoja === Number(filaHoja));
   if (!est) return;
 
-  const nuevoNombre = prompt("Apellido y Nombre:", est.nombre);
-  if (nuevoNombre === null) return;
+  const nuevoOrdenRaw = prompt("N° de Orden en la lista:", est.orden);
+  if (nuevoOrdenRaw === null) return;
+  const nuevoOrdenNum = parseInt(String(nuevoOrdenRaw).trim(), 10);
+  const nuevoOrden = (!isNaN(nuevoOrdenNum) && nuevoOrdenNum > 0) ? nuevoOrdenNum : String(nuevoOrdenRaw).trim();
+  if (!nuevoOrden) {
+    mostrarToast("⚠️ El N° de orden no puede quedar vacío");
+    return;
+  }
+
+  const nuevoNombreRaw = prompt("Apellido y Nombre:", est.nombre);
+  if (nuevoNombreRaw === null) return;
+  const nuevoNombre = nuevoNombreRaw.replace(/^\d+[\.\-\)]\s*/, "").trim().toUpperCase();
+  if (!nuevoNombre) {
+    mostrarToast("⚠️ El nombre no puede quedar vacío");
+    return;
+  }
+
+  // Verificar que el nuevo nombre no duplique a otro estudiante distinto del curso
+  const claveNueva = normalizarClaveNombreAlumno(nuevoNombre);
+  const duplicado = (estado.estudiantes || []).find(
+    e => e.filaHoja !== Number(filaHoja) && normalizarClaveNombreAlumno(e.nombre) === claveNueva
+  );
+  if (duplicado) {
+    mostrarToast(`⚠️ Ya existe "${duplicado.orden}. ${duplicado.nombre}" en la lista.`, 4500);
+    return;
+  }
+
   const nuevoGrupo = prompt("Grupo:", est.grupo || "Grupo 1");
   if (nuevoGrupo === null) return;
 
   try {
-    await fetch(scriptUrl, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ accion: "actualizarCelda", curso: estado.cursoActual, filaHoja: est.filaHoja, columnaHoja: 2, valor: nuevoNombre.trim().toUpperCase() }) });
-    await fetch(scriptUrl, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ accion: "actualizarCelda", curso: estado.cursoActual, filaHoja: est.filaHoja, columnaHoja: 3, valor: nuevoGrupo.trim() }) });
-    est.nombre = nuevoNombre.trim().toUpperCase();
+    mostrarToast("⏳ Actualizando datos del estudiante...");
+    await fetch(scriptUrl, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ accion: "actualizarCelda", curso: estado.cursoActual, filaHoja: est.filaHoja, columnaHoja: 1, valor: nuevoOrden })
+    });
+    await fetch(scriptUrl, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ accion: "actualizarCelda", curso: estado.cursoActual, filaHoja: est.filaHoja, columnaHoja: 2, valor: nuevoNombre })
+    });
+    await fetch(scriptUrl, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ accion: "actualizarCelda", curso: estado.cursoActual, filaHoja: est.filaHoja, columnaHoja: 3, valor: nuevoGrupo.trim() })
+    });
+
+    est.orden = nuevoOrden;
+    est.nombre = nuevoNombre;
     est.grupo = nuevoGrupo.trim();
+    ordenarEstudiantesPorNumero(estado.estudiantes);
     aplicarDatosRecibidos(estado, true);
-    mostrarToast("✅ Estudiante actualizado");
+    mostrarToast(`✅ Actualizado: ${est.orden}. ${est.nombre}`);
   } catch (err) {
     mostrarToast("⚠️ Error: " + err.message, 4000);
   }
@@ -595,16 +667,149 @@ async function eliminarEstudianteDeMatricula(filaHoja) {
   const est = (estado.estudiantes || []).find(e => e.filaHoja === Number(filaHoja));
   if (!est || !confirm(`⚠️ ¿Eliminar definitivamente a "${est.orden}. ${est.nombre}"?`)) return;
 
+  const deseaRenumerar = confirm(
+    `¿Querés renumerar automáticamente los N° de Orden (1, 2, 3...) después de eliminar a ${est.nombre} para que no queden números salteados?`
+  );
+
   try {
+    mostrarToast("⏳ Eliminando estudiante...");
     for (let col = 1; col <= 4; col++) {
-      await fetch(scriptUrl, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ accion: "actualizarCelda", curso: estado.cursoActual, filaHoja: est.filaHoja, columnaHoja: col, valor: "" }) });
+      await fetch(scriptUrl, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({ accion: "actualizarCelda", curso: estado.cursoActual, filaHoja: est.filaHoja, columnaHoja: col, valor: "" })
+      });
     }
     estado.estudiantes = (estado.estudiantes || []).filter(e => e.filaHoja !== Number(filaHoja));
     delete asistenciaActual[filaHoja];
-    aplicarDatosRecibidos(estado, true);
-    mostrarToast("🗑️ Estudiante eliminado");
+
+    if (deseaRenumerar && estado.estudiantes.length > 0) {
+      await renumerarOrdenEstudiantesCurso(true);
+    } else {
+      aplicarDatosRecibidos(estado, true);
+      mostrarToast("🗑️ Estudiante eliminado");
+    }
   } catch (err) {
     mostrarToast("⚠️ Error: " + err.message, 4000);
+  }
+}
+
+async function renumerarOrdenEstudiantesCurso(silencioso = false) {
+  const lista = estado.estudiantes || [];
+  if (lista.length === 0) {
+    mostrarToast("No hay estudiantes en el curso.");
+    return;
+  }
+
+  // Detectar si además quedaron alumnos duplicados con el mismo Apellido y Nombre
+  const vistos = new Map();
+  const duplicados = [];
+  lista.forEach(est => {
+    const clave = normalizarClaveNombreAlumno(est.nombre);
+    if (!clave) return;
+    if (vistos.has(clave)) {
+      duplicados.push({ repetido: est, original: vistos.get(clave) });
+    } else {
+      vistos.set(clave, est);
+    }
+  });
+
+  if (!silencioso) {
+    let msgConfirm = `🔢 ¿Querés corregir y renumerar los N° de Orden de toda la lista de 1 a ${lista.length - duplicados.length}?`;
+    if (duplicados.length > 0) {
+      msgConfirm += `\n\n🧹 Además se detectaron ${duplicados.length} estudiante(s) duplicado(s) que serán unificados automáticamente conservando su último grupo asignado.`;
+    }
+    if (!confirm(msgConfirm)) return;
+  }
+
+  try {
+    mostrarToast("⏳ Corrigiendo numeración y sincronizando con Sheets...");
+
+    // 1. Si había duplicados previos en la hoja, unificar su grupo en el original y limpiar la fila repetida
+    for (const par of duplicados) {
+      if (par.repetido.grupo && par.repetido.grupo !== par.original.grupo) {
+        par.original.grupo = par.repetido.grupo;
+        await fetch(scriptUrl, {
+          method: "POST",
+          headers: { "Content-Type": "text/plain;charset=utf-8" },
+          body: JSON.stringify({
+            accion: "actualizarCelda",
+            curso: estado.cursoActual,
+            filaHoja: par.original.filaHoja,
+            columnaHoja: 3,
+            valor: par.original.grupo
+          })
+        });
+      }
+      for (let col = 1; col <= 4; col++) {
+        await fetch(scriptUrl, {
+          method: "POST",
+          headers: { "Content-Type": "text/plain;charset=utf-8" },
+          body: JSON.stringify({
+            accion: "actualizarCelda",
+            curso: estado.cursoActual,
+            filaHoja: par.repetido.filaHoja,
+            columnaHoja: col,
+            valor: ""
+          })
+        });
+      }
+      delete asistenciaActual[par.repetido.filaHoja];
+    }
+
+    if (duplicados.length > 0) {
+      const filasRepetidas = new Set(duplicados.map(d => d.repetido.filaHoja));
+      estado.estudiantes = (estado.estudiantes || []).filter(e => !filasRepetidas.has(e.filaHoja));
+    }
+
+    // 2. Ordenar por el orden actual (o alfabético si empatan) y reasignar 1, 2, 3...
+    ordenarEstudiantesPorNumero(estado.estudiantes);
+
+    // Intentar primero acción por lote en backend; si el Apps Script aún no fue actualizado, actualizar celda por celda
+    let actualizadoPorLote = false;
+    try {
+      const respLote = await fetch(scriptUrl, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({
+          accion: "renumerarEstudiantes",
+          curso: estado.cursoActual
+        })
+      });
+      const jsonLote = await respLote.json();
+      if (jsonLote && jsonLote.ok && jsonLote.data) {
+        aplicarDatosRecibidos(jsonLote.data, true);
+        actualizadoPorLote = true;
+      }
+    } catch (e) {}
+
+    if (!actualizadoPorLote) {
+      for (let i = 0; i < estado.estudiantes.length; i++) {
+        const est = estado.estudiantes[i];
+        const nuevoOrd = i + 1;
+        if (Number(est.orden) !== nuevoOrd) {
+          est.orden = nuevoOrd;
+          await fetch(scriptUrl, {
+            method: "POST",
+            headers: { "Content-Type": "text/plain;charset=utf-8" },
+            body: JSON.stringify({
+              accion: "actualizarCelda",
+              curso: estado.cursoActual,
+              filaHoja: est.filaHoja,
+              columnaHoja: 1,
+              valor: nuevoOrd
+            })
+          });
+        } else {
+          est.orden = nuevoOrd;
+        }
+      }
+      aplicarDatosRecibidos(estado, true);
+    }
+
+    mostrarToast(`✅ Numeración corregida (1 a ${estado.estudiantes.length})`);
+  } catch (err) {
+    mostrarToast("⚠️ Error al renumerar: " + err.message, 4000);
   }
 }
 
@@ -719,6 +924,7 @@ function renderListaAsistencia() {
             <button type="button" class="pat-btn ${estadoAlu === 'A' ? 'active-A' : ''}" title="Ausente (+${valAus})" onclick="cambiarEstadoAsistencia(${est.filaHoja}, 'A')">A<small>+${valAus}</small></button>
             <button type="button" class="pat-btn ${estadoAlu === 'J' ? 'active-J' : ''}" title="Ausente Justificado (No computa falta)" onclick="cambiarEstadoAsistencia(${est.filaHoja}, 'J')">J<small>0</small></button>
             <button type="button" class="pat-btn ${estadoAlu === 'T' ? 'active-T' : ''}" title="Tarde (+0.25)" onclick="cambiarEstadoAsistencia(${est.filaHoja}, 'T')">T<small>+0.25</small></button>
+            <button type="button" class="btn-strike-mini" title="Editar N° de Orden, Nombre o Grupo" onclick="editarDatosEstudiante(${est.filaHoja})">✏️</button>
             <button type="button" class="btn-strike-mini" title="Tachar en lista" onclick="alternarEstadoTachado(${est.filaHoja})">🚫</button>
           </div>
         </div>
@@ -735,6 +941,7 @@ function renderListaAsistencia() {
         <div class="tachado-item">
           <div><span class="stu-name tachado-text">${est.orden}. ${est.nombre}</span></div>
           <div style="display:flex; gap:6px;">
+            <button type="button" class="btn-outline" style="padding:4px 8px; font-size:11px;" onclick="editarDatosEstudiante(${est.filaHoja})">✏️ Editar</button>
             <button type="button" class="btn-success-outline" onclick="alternarEstadoTachado(${est.filaHoja})">✅ Activar</button>
             <button type="button" class="btn-danger-outline" onclick="eliminarEstudianteDeMatricula(${est.filaHoja})">🗑️</button>
           </div>
@@ -1093,6 +1300,7 @@ function renderVistaMateria() {
         </strong>
         <div style="display:flex; gap:5px; align-items:center;">
           <span class="badge badge-grp">${est.grupo}</span>
+          <button class="btn-outline" style="padding:3px 7px; font-size:10.5px;" title="Editar N° Orden / Nombre / Grupo" onclick="editarDatosEstudiante(${est.filaHoja})">✏️</button>
           ${tachado
             ? `<button class="btn-success-outline" style="padding:3px 7px; font-size:10.5px;" onclick="alternarEstadoTachado(${est.filaHoja})">✅</button>`
             : `<button class="btn-danger-outline" style="padding:3px 7px; font-size:10.5px;" onclick="alternarEstadoTachado(${est.filaHoja})">🚫</button>`
@@ -1338,11 +1546,12 @@ function renderVistaAlumno() {
         <div>
           <div class="stu-name ${tachado ? 'tachado-text' : ''}" style="font-size:15px;">${est.orden}. ${est.nombre}</div>
           <div style="font-size:12px; color:#475569; margin-top:3px;">
-            <strong>Grupo:</strong> ${est.grupo} &nbsp;|&nbsp; <strong>Estado:</strong> ${est.estado || 'Activo'} &nbsp;|&nbsp; <strong>Faltas:</strong> ${totFaltas}
+            <strong>Orden N°:</strong> ${est.orden} &nbsp;|&nbsp; <strong>Grupo:</strong> ${est.grupo} &nbsp;|&nbsp; <strong>Estado:</strong> ${est.estado || 'Activo'} &nbsp;|&nbsp; <strong>Faltas:</strong> ${totFaltas}
           </div>
         </div>
         <div style="display:flex; gap:6px; flex-wrap:wrap;">
-          <button type="button" class="btn-outline" onclick="editarDatosEstudiante(${est.filaHoja})">✏️ Editar</button>
+          <button type="button" class="btn-outline" onclick="editarDatosEstudiante(${est.filaHoja})">✏️ Editar Orden / Datos</button>
+          <button type="button" class="btn-outline" onclick="renumerarOrdenEstudiantesCurso(false)">🔢 Renumerar Curso</button>
           ${tachado ? `<button type="button" class="btn-success-outline" onclick="alternarEstadoTachado(${est.filaHoja})">✅ Activar</button>` : `<button type="button" class="btn-danger-outline" onclick="alternarEstadoTachado(${est.filaHoja})">🚫 Tachar</button>`}
           <button type="button" class="btn-danger-outline" onclick="eliminarEstudianteDeMatricula(${est.filaHoja})">🗑️</button>
         </div>
@@ -1428,7 +1637,7 @@ function renderTablaCompleta() {
   const mats = obtenerMateriasOrdenadasVisualmente();
 
   let html = `<table class="app-table"><thead><tr>
-    <th rowspan="2">Ord</th><th rowspan="2">Estudiante</th><th rowspan="2">Grp</th><th rowspan="2">Estado</th>`;
+    <th rowspan="2">Ord</th><th rowspan="2">Estudiante</th><th rowspan="2">Grp</th><th rowspan="2">Acción</th>`;
   mats.forEach(m => {
     const esTal = esMateriaDeTaller(m);
     const bgHeader = esTal ? "background:#e8f0fe; color:#0d47a1;" : "background:#f1f5f9; color:#1e293b;";
@@ -1443,8 +1652,15 @@ function renderTablaCompleta() {
     if (tachado && !mostrarTachados) return;
 
     html += `<tr class="${tachado ? 'fila-tachada' : ''}">
-      <td>${est.orden}</td><td class="td-left">${est.nombre}</td><td>${est.grupo}</td>
-      <td><button type="button" class="${tachado ? 'btn-success-outline' : 'btn-danger-outline'}" style="padding:2px 5px; font-size:10px;" onclick="alternarEstadoTachado(${est.filaHoja})">${tachado ? '✅' : '🚫'}</button></td>`;
+      <td style="cursor:pointer; font-weight:800; color:#1e3a8a; text-decoration:underline;" title="Tocá para cambiar el N° de Orden" onclick="editarDatosEstudiante(${est.filaHoja})">${est.orden}</td>
+      <td class="td-left">${est.nombre}</td>
+      <td>${est.grupo}</td>
+      <td>
+        <div style="display:flex; gap:3px; justify-content:center;">
+          <button type="button" class="btn-outline" style="padding:2px 5px; font-size:10px;" title="Editar Orden / Nombre / Grupo" onclick="editarDatosEstudiante(${est.filaHoja})">✏️</button>
+          <button type="button" class="${tachado ? 'btn-success-outline' : 'btn-danger-outline'}" style="padding:2px 5px; font-size:10px;" onclick="alternarEstadoTachado(${est.filaHoja})">${tachado ? '✅' : '🚫'}</button>
+        </div>
+      </td>`;
 
     mats.forEach(m => {
       const nm = (est.notas && est.notas[m.indice]) || {};
@@ -1556,18 +1772,86 @@ async function eliminarMateriaActual() {
 }
 
 async function abrirModalNuevoAlumno() {
-  const nombre = prompt("Apellido y Nombre:");
-  if (!nombre || !nombre.trim()) return;
-  const grupo = prompt("Grupo:", "Grupo 1") || "Grupo 1";
-  const orden = (estado.estudiantes || []).length + 1;
+  const nombreRaw = prompt("Apellido y Nombre:");
+  if (!nombreRaw || !nombreRaw.trim()) return;
+  const nombreLimpio = nombreRaw.replace(/^\d+[\.\-\)]\s*/, "").trim().toUpperCase();
+  const grupo = prompt("Grupo:", "Grupo 1");
+  if (grupo === null) return;
+
+  const claveNombre = normalizarClaveNombreAlumno(nombreLimpio);
+  const existente = (estado.estudiantes || []).find(
+    e => normalizarClaveNombreAlumno(e.nombre) === claveNombre
+  );
+
+  // Si ya existe un alumno con el mismo Apellido y Nombre, se reescribe su fila sin duplicar
+  if (existente) {
+    const ordenPropuesto = prompt(
+      `ℹ️ "${existente.nombre}" ya está en la lista (Orden N° ${existente.orden}).\nSe actualizarán sus datos sin duplicarlo.\n\nN° de Orden:`,
+      existente.orden
+    );
+    if (ordenPropuesto === null) return;
+    const ordFinal = parseInt(ordenPropuesto, 10) || existente.orden;
+
+    try {
+      mostrarToast("⏳ Reescribiendo datos del estudiante existente...");
+      await fetch(scriptUrl, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({ accion: "actualizarCelda", curso: estado.cursoActual, filaHoja: existente.filaHoja, columnaHoja: 1, valor: ordFinal })
+      });
+      await fetch(scriptUrl, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({ accion: "actualizarCelda", curso: estado.cursoActual, filaHoja: existente.filaHoja, columnaHoja: 2, valor: nombreLimpio })
+      });
+      await fetch(scriptUrl, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({ accion: "actualizarCelda", curso: estado.cursoActual, filaHoja: existente.filaHoja, columnaHoja: 3, valor: (grupo || "Grupo 1").trim() })
+      });
+      await fetch(scriptUrl, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({ accion: "actualizarCelda", curso: estado.cursoActual, filaHoja: existente.filaHoja, columnaHoja: 4, valor: "Activo" })
+      });
+
+      existente.orden = ordFinal;
+      existente.nombre = nombreLimpio;
+      existente.grupo = (grupo || "Grupo 1").trim();
+      existente.estado = "Activo";
+      ordenarEstudiantesPorNumero(estado.estudiantes);
+      aplicarDatosRecibidos(estado, true);
+      mostrarToast(`✅ Estudiante actualizado sin duplicar (${existente.orden}. ${existente.nombre})`);
+    } catch (err) {
+      mostrarToast("⚠️ Error: " + err.message, 4000);
+    }
+    return;
+  }
+
+  const sigOrden = obtenerSiguienteNumeroOrden();
+  const ordenInput = prompt("N° de Orden en la lista:", String(sigOrden));
+  if (ordenInput === null) return;
+  const ordenFinal = parseInt(ordenInput, 10) || sigOrden;
 
   const resp = await fetch(scriptUrl, {
     method: "POST",
     headers: { "Content-Type": "text/plain;charset=utf-8" },
-    body: JSON.stringify({ accion: "agregarEstudiante", curso: estado.cursoActual, datosAlumno: { orden, nombre: nombre.trim().toUpperCase(), grupo: grupo.trim(), estado: "Activo" } })
+    body: JSON.stringify({
+      accion: "agregarEstudiante",
+      curso: estado.cursoActual,
+      datosAlumno: {
+        orden: ordenFinal,
+        nombre: nombreLimpio,
+        grupo: (grupo || "Grupo 1").trim(),
+        estado: "Activo"
+      }
+    })
   });
   const json = await resp.json();
-  if (json.ok) aplicarDatosRecibidos(json.data);
+  if (json.ok) {
+    aplicarDatosRecibidos(json.data);
+    mostrarToast(`✅ Estudiante agregado (Orden N° ${ordenFinal})`);
+  }
 }
 
 async function abrirModalNuevaMateria() {
