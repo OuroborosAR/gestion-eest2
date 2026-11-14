@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Gestión Académica, Asistencia y Parte Diario - EEST N°2</title>
+  <title>Gestión Académica, Asistencia, Familias y Actas - EEST N°2</title>
   <!-- Metadatos PWA para instalación en celular -->
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -42,23 +42,27 @@
     <div class="loader-subtitle" id="loaderTextMsg">Conectando con Google Sheets y cargando estados administrativos...</div>
   </div>
 
-  <!-- PANTALLA DE LOGIN PROTEGIDA -->
+  <!-- PANTALLA DE LOGIN PROTEGIDA (PERSONAL Y FAMILIAS POR DNI) -->
   <div id="loginOverlayScreen" class="login-overlay-screen">
     <div class="login-card-box">
       <img class="school-logo-eest2" alt="Escudo EEST N°2">
       <h2 style="font-size:16px; font-weight:900; color:#0f172a;">E.E.S.T. N°2 de San Fernando</h2>
-      <p style="font-size:12px; color:#64748b; font-weight:700; margin-bottom:14px;">"Pbro. Dr. Manuel de San Ginés"<br>Acceso al Sistema de Estados Administrativos</p>
+      <p style="font-size:12px; color:#64748b; font-weight:700; margin-bottom:10px;">"Pbro. Dr. Manuel de San Ginés"<br>Sistema de Gestión Académica y Portal de Familias</p>
+
+      <div style="background:#eff6ff; border:1px solid #bfdbfe; color:#1e3a8a; border-radius:8px; padding:8px 10px; font-size:11.5px; text-align:left; margin-bottom:12px; line-height:1.35;">
+        👨‍👩‍👧 <strong>Ingreso para Familias:</strong> colocá el <b>N° de DNI del estudiante</b> (sin puntos) tanto en Usuario como en Contraseña.
+      </div>
 
       <div id="loginErrorBanner" style="display:none; background:#fee2e2; color:#b91c1c; padding:8px 10px; border-radius:8px; font-size:12px; font-weight:700; margin-bottom:12px;"></div>
 
       <div class="form-group" style="text-align:left; margin-bottom:10px;">
-        <label>👤 Usuario</label>
-        <input type="text" id="authInputUser" placeholder="Ej: admin, directivo, silvana..." autocomplete="username">
+        <label>👤 Usuario o DNI del Estudiante</label>
+        <input type="text" id="authInputUser" placeholder="DNI del alumno (Familias) o Usuario (Personal)" autocomplete="username">
       </div>
 
       <div class="form-group" style="text-align:left; margin-bottom:10px;">
         <label>🔒 Contraseña o PIN</label>
-        <input type="password" id="authInputPass" placeholder="••••" autocomplete="current-password" onkeydown="if(event.key==='Enter') iniciarSesionSistema()">
+        <input type="password" id="authInputPass" placeholder="DNI del alumno o tu clave" autocomplete="current-password" onkeydown="if(event.key==='Enter') iniciarSesionSistema()">
       </div>
 
       <div style="display:flex; align-items:center; gap:6px; margin-bottom:14px; font-size:12px; color:#475569;">
@@ -77,7 +81,7 @@
       <div class="brand-header-flex">
         <img class="brand-mini-logo school-logo-eest2" alt="Escudo">
         <div>
-          <div class="app-title">E.E.S.T. N° 2 — Gestión Académica, Asistencia y Parte Diario</div>
+          <div class="app-title">E.E.S.T. N° 2 — Gestión Académica, Asistencia y Portal de Familias</div>
           <div class="app-subtitle" id="statusSubtitle">Conectando con Google Sheets...</div>
         </div>
       </div>
@@ -89,39 +93,41 @@
         <button class="btn-icon" onclick="abrirModalGestionUsuarios()" id="btnAdminUsuarios" style="display:none; background:#4f46e5;" title="Administrar Usuarios y Roles">👥 Usuarios</button>
         <button class="btn-icon" onclick="cambiarMiPropiaClavePrompt()" title="Cambiar mi contraseña o PIN">🔑 Clave</button>
         <button class="btn-icon" onclick="instalarPWA()" id="btnInstalarPWA" style="display:none;" title="Instalar App en el Celular">📲 Instalar App</button>
-        <button class="btn-icon" onclick="abrirModalSelectorCurso(false)" title="Seleccionar, Crear o Eliminar Curso">🏫 Cursos</button>
-        <button class="btn-icon" onclick="abrirModalConfigHorario()" title="Configurar Horario, Materias y Profes del Parte">🗓️ Horarios Parte</button>
+        <button class="btn-icon staff-only-ctrl" id="btnHeaderCursosModal" onclick="abrirModalSelectorCurso(false)" title="Seleccionar, Crear o Eliminar Curso">🏫 Cursos</button>
+        <button class="btn-icon staff-only-ctrl" id="btnHeaderHorariosModal" onclick="abrirModalConfigHorario()" title="Configurar Horario, Materias y Profes del Parte">🗓️ Horarios Parte</button>
         <button class="btn-icon" onclick="recargarCursoActual()" title="Actualizar datos">🔄</button>
-        <button class="btn-icon" onclick="configurarUrlManual()" title="Configurar URL Script">⚙️</button>
+        <button class="btn-icon staff-only-ctrl" id="btnHeaderConfigUrl" onclick="configurarUrlManual()" title="Configurar URL Script">⚙️</button>
         <button class="btn-icon" onclick="cerrarSesionActual()" style="background:#dc2626;" title="Cerrar sesión">🚪 Salir</button>
       </div>
     </div>
 
-    <div class="header-controls">
+    <div class="header-controls" id="headerStaffControlsBar">
       <select id="cursoSelect" onchange="cambiarCurso(this.value)">
         <option value="">Cargando cursos...</option>
       </select>
-      <button class="btn-icon" onclick="abrirModalNuevoAlumno()">+ Alumno</button>
-      <button class="btn-icon" onclick="abrirModalCargaMasivaAlumnos()">+ Lote Alumnos</button>
-      <button class="btn-icon" onclick="renumerarOrdenEstudiantesCurso(false)" title="Corregir números de orden (1, 2, 3...) y limpiar duplicados">🔢 Renumerar 	Orden</button>
-      <button class="btn-icon" id="btnHeaderNuevoCurso" onclick="abrirModalSelectorCurso(true)">+ Nuevo Curso</button>
+      <button class="btn-icon staff-only-ctrl" onclick="abrirModalNuevoAlumno()">+ Alumno</button>
+      <button class="btn-icon staff-only-ctrl" onclick="abrirModalCargaMasivaAlumnos()">+ Lote Alumnos</button>
+      <button class="btn-icon staff-only-ctrl" onclick="renumerarOrdenEstudiantesCurso(false)" title="Corregir números de orden (1, 2, 3...) y limpiar duplicados">🔢 Renumerar Orden</button>
+      <button class="btn-icon staff-only-ctrl" id="btnHeaderNuevoCurso" onclick="abrirModalSelectorCurso(true)">+ Nuevo Curso</button>
+    </div>
   </header>
 
-  <nav class="nav-tabs">
+  <nav class="nav-tabs" id="mainNavTabs">
     <button class="nav-tab active" id="tabBtn-asistencia" onclick="mostrarVista('asistencia')">📋 Asistencia</button>
     <button class="nav-tab" id="tabBtn-parte" onclick="mostrarVista('parte')">🖨️ Parte Imprimible</button>
     <button class="nav-tab" id="tabBtn-materia" onclick="mostrarVista('materia')">📚 Por Materia</button>
     <button class="nav-tab" id="tabBtn-alumno" onclick="mostrarVista('alumno')">👤 Por Alumno</button>
+    <button class="nav-tab" id="tabBtn-actas" onclick="mostrarVista('actas')">📄 Actas</button>
     <button class="nav-tab" id="tabBtn-planilla" onclick="mostrarVista('planilla')">📊 Planilla</button>
   </nav>
 
   <main class="container">
 
-    <!-- VISTA 1: ASISTENCIA DIARIA Y WHATSAPP -->
+    <!-- VISTA 1: ASISTENCIA DIARIA, ASISTENCIA DOCENTE POR MATERIA Y WHATSAPP -->
     <section id="vista-asistencia">
       <div class="panel">
         <div class="panel-title">
-          <span>📋 Parte Diario Digital (Envío por WhatsApp)</span>
+          <span>📋 Parte Diario Digital (Envío por WhatsApp y Control de 75% por Materia)</span>
           <button class="btn-outline" onclick="marcarTodosPresentes()">✔️ Todos Presentes</button>
         </div>
 
@@ -204,6 +210,9 @@
             <input type="text" id="asistObs" placeholder="Ej: Sin actividad en 5ta hora" oninput="actualizarVistaPreviaWA()">
           </div>
         </div>
+
+        <!-- CONTROL DE ASISTENCIA DOCENTE POR MATERIA DEL DÍA (PARA CÁLCULO DEL 75% DE CLASES DICTADAS) -->
+        <div id="contenedorAsistenciaDocenteDia" class="prof-asist-box"></div>
 
         <div id="bannerEstadoParte" class="edit-mode-banner"></div>
 
@@ -339,13 +348,13 @@
       </div>
     </section>
 
-    <!-- VISTA 4: FICHA INDIVIDUAL POR ALUMNO + INFORME FAMILIAR -->
+    <!-- VISTA 4: FICHA INDIVIDUAL POR ALUMNO + PORTAL FAMILIAS + GRÁFICOS + 75% POR MATERIA -->
     <section id="vista-alumno" class="hidden">
       <div class="panel">
         <div class="panel-title">
-          <span>👤 Ficha Académica, Comunicado Familiar (WhatsApp) y PDF Cuaderno</span>
+          <span id="lblTituloVistaAlumno">👤 Ficha Académica, Gráficos de Asistencia (75% por Materia) y Notificaciones a Familias</span>
         </div>
-        <div class="form-group" style="margin-bottom:12px;">
+        <div class="form-group" id="boxSelectorAlumnoStaff" style="margin-bottom:12px;">
           <label>Seleccionar Estudiante (Incluye Activos y Tachados)</label>
           <select id="alumnoSelect" onchange="renderVistaAlumno()"></select>
         </div>
@@ -353,7 +362,24 @@
       </div>
     </section>
 
-    <!-- VISTA 5: PLANILLA GENERAL COMPLETA -->
+    <!-- VISTA 5: GENERADOR E HISTORIAL DE ACTAS INSTITUCIONALES (DEC. 2299/11 Y RES. 1650/24) -->
+    <section id="vista-actas" class="hidden">
+      <div class="panel">
+        <div class="panel-title">
+          <span>📄 Generador Automático de Actas Institucionales (Dec. 2299/11 Arts. 217-220 y Res. 1650/24)</span>
+        </div>
+        <div id="contenedorGeneradorActas"></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-title">
+          <span>🗂️ Registro de Actas Labradas en el Curso</span>
+        </div>
+        <div class="table-wrap" id="tablaHistorialActasCurso"></div>
+      </div>
+    </section>
+
+    <!-- VISTA 6: PLANILLA GENERAL COMPLETA -->
     <section id="vista-planilla" class="hidden">
       <div class="panel">
         <div class="panel-title">
@@ -370,7 +396,9 @@
       </div>
     </section>
 
+    <!-- CONTENEDORES DE IMPRESIÓN DEDICADOS -->
     <div id="printComunicadosRoot"></div>
+    <div id="printActasRoot"></div>
 
   </main>
 
@@ -386,8 +414,8 @@
         <h3 style="font-size:13.5px; color:#1e3a8a; margin-bottom:8px;">➕ Crear o Editar Usuario</h3>
         <div class="form-grid">
           <div class="form-group">
-            <label>Usuario (sin espacios)</label>
-            <input type="text" id="usrFormLogin" placeholder="Ej: silvana">
+            <label>Usuario o DNI (sin espacios)</label>
+            <input type="text" id="usrFormLogin" placeholder="Ej: silvana o DNI">
           </div>
           <div class="form-group">
             <label>Clave / PIN</label>
@@ -403,6 +431,7 @@
               <option value="PRECEPTOR">PRECEPTOR/A (Por cursos)</option>
               <option value="DIRECTIVO">DIRECTIVO (Acceso Total)</option>
               <option value="ADMIN">ADMINISTRADOR (Acceso Total)</option>
+              <option value="FAMILIA">FAMILIA (Vinculado desde Ficha Alumno)</option>
             </select>
           </div>
         </div>

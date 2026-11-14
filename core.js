@@ -88,10 +88,13 @@ let estado = {
   columnasInasistencias: null,
   historialAsistencias: [],
   horarioParte: null,
+  notificacionesCurso: [],
+  actasCurso: [],
   esCicloBasico: false
 };
 
 let asistenciaActual = {};
+let materiasSinProfesorActual = [];
 let filasEditorHorarioTemp = [];
 
 let configInformeAlumno = {
@@ -192,7 +195,7 @@ async function iniciarSesionSistema() {
   const recordar = document.getElementById("authChkRemember").checked;
 
   if (!u || !c) {
-    mostrarPantallaLogin("Ingresá tu usuario y tu contraseña o PIN.");
+    mostrarPantallaLogin("Ingresá tu usuario (o DNI del estudiante) y tu contraseña.");
     return;
   }
 
@@ -234,6 +237,11 @@ function esAdminODirectivoActual() {
   if (!estado.usuarioActual) return false;
   const r = String(estado.usuarioActual.rol || "").toUpperCase();
   return r === "ADMIN" || r === "DIRECTIVO";
+}
+
+function esRolFamiliaActual() {
+  if (!estado.usuarioActual) return false;
+  return String(estado.usuarioActual.rol || "").toUpperCase() === "FAMILIA";
 }
 
 function abrirModalGestionUsuarios() {
@@ -300,7 +308,7 @@ function renderizarTablaUsuariosSistema() {
     return;
   }
 
-  let html = `<table class="app-table"><thead><tr><th>Usuario</th><th>Clave</th><th>Nombre</th><th>Rol</th><th>Cursos</th><th>Acciones</th></tr></thead><tbody>`;
+  let html = `<table class="app-table"><thead><tr><th>Usuario / DNI</th><th>Clave</th><th>Nombre</th><th>Rol</th><th>Cursos / Vínculo</th><th>Acciones</th></tr></thead><tbody>`;
   lista.forEach(u => {
     html += `
       <tr>
@@ -428,6 +436,7 @@ function instalarPWA() {
 }
 
 function abrirModalSelectorCurso(directoACrear = false) {
+  if (esRolFamiliaActual()) return;
   renderTarjetasCursosEnModal();
   mostrarFormularioNuevoCurso(directoACrear);
   document.getElementById("modalSelectorCurso").classList.add("open");
@@ -613,7 +622,6 @@ async function ejecutarCargaMasivaAlumnos() {
     ? normalizarClaveNombreAlumno
     : (s => String(s || "").trim().toUpperCase());
 
-  // 1. Deduplicar dentro del mismo lote pegado (si se repitió el mismo nombre, prevalece el último)
   const lotePorClave = new Map();
   texto.split(/\r?\n/).forEach(linea => {
     const l = linea.trim();
@@ -646,7 +654,6 @@ async function ejecutarCargaMasivaAlumnos() {
     return;
   }
 
-  // 2. Separar entre estudiantes que YA existen en el curso (se reescriben) y estudiantes nuevos
   const mapaExistentes = new Map();
   (estado.estudiantes || []).forEach(est => {
     const c = normalizar(est.nombre);
@@ -685,7 +692,6 @@ async function ejecutarCargaMasivaAlumnos() {
   try {
     mostrarToast("⏳ Procesando lote sin duplicar...");
 
-    // Reescribir los estudiantes que ya existían en la lista
     for (const itemUpd of existentesAActualizar) {
       if (String(itemUpd.estRef.orden) !== String(itemUpd.orden)) {
         await fetch(scriptUrl, {
@@ -741,7 +747,6 @@ async function ejecutarCargaMasivaAlumnos() {
       itemUpd.estRef.estado = "Activo";
     }
 
-    // Agregar únicamente los estudiantes nuevos
     if (nuevosAAgregar.length > 0) {
       const resp = await fetch(scriptUrl, {
         method: "POST",
@@ -910,12 +915,20 @@ function mostrarToast(msg, duracion = 2800) {
 }
 
 function mostrarVista(nombre) {
-  ["asistencia", "parte", "materia", "alumno", "planilla"].forEach(v => {
-    document.getElementById(`vista-${v}`).classList.toggle("hidden", v !== nombre);
-    document.getElementById(`tabBtn-${v}`).classList.toggle("active", v === nombre);
+  if (esRolFamiliaActual()) {
+    nombre = "alumno";
+  }
+  ["asistencia", "parte", "materia", "alumno", "actas", "planilla"].forEach(v => {
+    const sec = document.getElementById(`vista-${v}`);
+    const btn = document.getElementById(`tabBtn-${v}`);
+    if (sec) sec.classList.toggle("hidden", v !== nombre);
+    if (btn) btn.classList.toggle("active", v === nombre);
   });
   if (nombre === "parte" && typeof pdRenderCurrentSelection === "function") {
     pdRenderCurrentSelection();
+  }
+  if (nombre === "actas" && typeof renderVistaActas === "function") {
+    renderVistaActas();
   }
 }
 
@@ -940,12 +953,18 @@ async function cargarDatosDesdeSheet(nombreCurso, mostrarSelectorInicial = false
     }
 
     aplicarDatosRecibidos(json.data, false);
-    const cantActivos = (estado.estudiantes || []).filter(e => !esEstudianteTachado(e)).length;
-    document.getElementById("statusSubtitle").textContent = `Curso: ${estado.cursoActual.replace(/_/g, " ")} (${cantActivos} activos)`;
-
-    if (mostrarSelectorInicial && primeraCargaApp) {
+    const esFam = esRolFamiliaActual();
+    if (esFam) {
+      const aluNombre = (estado.estudiantes && estado.estudiantes[0]) ? estado.estudiantes[0].nombre : "";
+      document.getElementById("statusSubtitle").textContent = `Portal de Familias — Curso: ${estado.cursoActual.replace(/_/g, " ")} ${aluNombre ? '• ' + aluNombre : ''}`;
       primeraCargaApp = false;
-      abrirModalSelectorCurso(false);
+    } else {
+      const cantActivos = (estado.estudiantes || []).filter(e => !esEstudianteTachado(e)).length;
+      document.getElementById("statusSubtitle").textContent = `Curso: ${estado.cursoActual.replace(/_/g, " ")} (${cantActivos} activos)`;
+      if (mostrarSelectorInicial && primeraCargaApp) {
+        primeraCargaApp = false;
+        abrirModalSelectorCurso(false);
+      }
     }
     return true;
   } catch (err) {
@@ -958,6 +977,7 @@ async function cargarDatosDesdeSheet(nombreCurso, mostrarSelectorInicial = false
 
 function aplicarDatosRecibidos(data, preservarSeleccionPantalla = false) {
   const copiaAsistenciaPrevia = { ...asistenciaActual };
+  const copiaSinProfPrevia = [...materiasSinProfesorActual];
   const alumnoSelPrevio = document.getElementById("alumnoSelect")?.value || "";
   const materiaSelPrevia = document.getElementById("materiaSelect")?.value || "";
 
@@ -974,36 +994,58 @@ function aplicarDatosRecibidos(data, preservarSeleccionPantalla = false) {
       document.getElementById("lblActiveUserName").textContent = estado.usuarioActual.nombre;
       document.getElementById("lblActiveUserRole").textContent = estado.usuarioActual.rol;
     }
-    if (estado.usuarioActual.nombre) {
+    if (estado.usuarioActual.nombre && !esRolFamiliaActual()) {
       document.getElementById("asistPreceptor").value = estado.usuarioActual.nombre;
     }
   }
 
   const esJefe = esAdminODirectivoActual();
+  const esFam = esRolFamiliaActual();
+
+  // Visibilidad de controles según rol (Personal vs Familia)
+  document.querySelectorAll(".staff-only-ctrl").forEach(el => {
+    el.style.display = esFam ? "none" : "";
+  });
+  const barStaff = document.getElementById("headerStaffControlsBar");
+  if (barStaff) barStaff.style.display = esFam ? "none" : "flex";
+  const navTabs = document.getElementById("mainNavTabs");
+  if (navTabs) navTabs.style.display = esFam ? "none" : "grid";
+  const boxSelAlu = document.getElementById("boxSelectorAlumnoStaff");
+  if (boxSelAlu) boxSelAlu.style.display = esFam ? "none" : "flex";
+  const lblTitAlu = document.getElementById("lblTituloVistaAlumno");
+  if (lblTitAlu) {
+    lblTitAlu.textContent = esFam
+      ? "👨‍👩‍👧 Portal de Familias — Comunicados Oficiales, Asistencia (75% por Materia) y Calificaciones"
+      : "👤 Ficha Académica, Gráficos de Asistencia (75% por Materia) y Notificaciones a Familias";
+  }
+
   const btnUsrs = document.getElementById("btnAdminUsuarios");
-  if (btnUsrs) btnUsrs.style.display = esJefe ? "inline-flex" : "none";
+  if (btnUsrs) btnUsrs.style.display = (!esFam && esJefe) ? "inline-flex" : "none";
   const btnNC1 = document.getElementById("btnHeaderNuevoCurso");
-  if (btnNC1) btnNC1.style.display = esJefe ? "inline-flex" : "none";
+  if (btnNC1) btnNC1.style.display = (!esFam && esJefe) ? "inline-flex" : "none";
   const btnNC2 = document.getElementById("btnAbrirFormCrearCurso");
-  if (btnNC2) btnNC2.style.display = esJefe ? "inline-flex" : "none";
+  if (btnNC2) btnNC2.style.display = (!esFam && esJefe) ? "inline-flex" : "none";
 
   const lblCursoPD = document.getElementById("pdCursoLabel");
   if (lblCursoPD) lblCursoPD.textContent = (data.cursoActual || "").replace(/_/g, " ");
 
   const selCurso = document.getElementById("cursoSelect");
-  selCurso.innerHTML = "";
-  (data.cursos || []).forEach(c => {
-    const opt = document.createElement("option");
-    opt.value = c;
-    opt.textContent = c.replace(/_/g, " ");
-    if (c === data.cursoActual) opt.selected = true;
-    selCurso.appendChild(opt);
-  });
+  if (selCurso) {
+    selCurso.innerHTML = "";
+    (data.cursos || []).forEach(c => {
+      const opt = document.createElement("option");
+      opt.value = c;
+      opt.textContent = c.replace(/_/g, " ");
+      if (c === data.cursoActual) opt.selected = true;
+      selCurso.appendChild(opt);
+    });
+  }
 
   if (typeof actualizarOpcionesTurnoGrupo === "function") actualizarOpcionesTurnoGrupo();
 
   if (preservarSeleccionPantalla && Object.keys(copiaAsistenciaPrevia).length > 0) {
     asistenciaActual = copiaAsistenciaPrevia;
+    materiasSinProfesorActual = copiaSinProfPrevia;
   } else if (typeof cargarParteGuardadoSiExiste === "function") {
     cargarParteGuardadoSiExiste();
   }
@@ -1011,21 +1053,34 @@ function aplicarDatosRecibidos(data, preservarSeleccionPantalla = false) {
   if (typeof poblarSelectorMateriasOrdenado === "function") poblarSelectorMateriasOrdenado(materiaSelPrevia);
 
   const selAlu = document.getElementById("alumnoSelect");
-  selAlu.innerHTML = "";
-  (data.estudiantes || []).forEach(e => {
-    const opt = document.createElement("option");
-    opt.value = e.filaHoja;
-    const marcaTachado = esEstudianteTachado(e) ? " [🚫 TACHADO]" : "";
-    opt.textContent = `${e.orden}. ${e.nombre} (${e.grupo})${marcaTachado}`;
-    selAlu.appendChild(opt);
-  });
-  if ([...selAlu.options].some(o => o.value === String(alumnoSelPrevio))) selAlu.value = alumnoSelPrevio;
+  if (selAlu) {
+    selAlu.innerHTML = "";
+    (data.estudiantes || []).forEach(e => {
+      const opt = document.createElement("option");
+      opt.value = e.filaHoja;
+      const marcaTachado = esEstudianteTachado(e) ? " [🚫 TACHADO]" : "";
+      opt.textContent = `${e.orden}. ${e.nombre} (${e.grupo})${marcaTachado}`;
+      selAlu.appendChild(opt);
+    });
+    if ([...selAlu.options].some(o => o.value === String(alumnoSelPrevio))) {
+      selAlu.value = alumnoSelPrevio;
+    } else if (selAlu.options.length > 0) {
+      selAlu.selectedIndex = 0;
+    }
+  }
+
+  if (esFam) {
+    mostrarVista("alumno");
+    if (typeof renderVistaAlumno === "function") renderVistaAlumno();
+    return;
+  }
 
   if (typeof renderListaAsistencia === "function") renderListaAsistencia();
   if (typeof renderTablaAcumuladoInasistencias === "function") renderTablaAcumuladoInasistencias();
   if (typeof renderHistorialAsistencias === "function") renderHistorialAsistencias();
   if (typeof renderVistaMateria === "function") renderVistaMateria();
   if (typeof renderVistaAlumno === "function") renderVistaAlumno();
+  if (typeof renderVistaActas === "function") renderVistaActas();
   if (typeof renderTablaCompleta === "function") renderTablaCompleta();
   if (typeof pdRenderCurrentSelection === "function") pdRenderCurrentSelection();
   renderTarjetasCursosEnModal();
@@ -1033,6 +1088,7 @@ function aplicarDatosRecibidos(data, preservarSeleccionPantalla = false) {
 }
 
 function cambiarCurso(nuevoCurso) {
+  if (esRolFamiliaActual()) return;
   if (nuevoCurso) {
     localStorage.setItem("eest2_ultimo_curso", nuevoCurso);
     cargarDatosDesdeSheet(nuevoCurso, false);
@@ -1044,6 +1100,7 @@ function recargarCursoActual() {
 }
 
 function configurarUrlManual() {
+  if (esRolFamiliaActual()) return;
   const nueva = prompt("URL del WebApp (/exec):", scriptUrl);
   if (nueva && nueva.trim()) {
     scriptUrl = nueva.trim();

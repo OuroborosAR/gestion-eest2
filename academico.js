@@ -119,6 +119,7 @@ function poblarSelectorMateriasOrdenado(valorPrevio) {
 }
 
 function alternarTipoMateriaTallerTeoria(indiceMat) {
+  if (typeof esRolFamiliaActual === "function" && esRolFamiliaActual()) return;
   const mat = (estado.materias || []).find(m => m.indice === Number(indiceMat));
   if (!mat) return;
   const clave = `${estado.cursoActual || "curso"}_${mat.indice}`;
@@ -136,7 +137,6 @@ function alternarTipoMateriaTallerTeoria(indiceMat) {
 }
 
 /* ==================== LÓGICA DE PROMEDIOS Y PONDERACIÓN (RÉGIMEN ACADÉMICO) ==================== */
-
 function parsearNotaNumerica(val) {
   if (val === undefined || val === null) return NaN;
   const str = String(val).trim().replace(",", ".");
@@ -363,6 +363,272 @@ function esEstudianteTachado(est) {
   return st.indexOf("tachado") !== -1 || st.indexOf("baja") !== -1 || st.indexOf("pase") !== -1;
 }
 
+/* ==================== ASISTENCIA DOCENTE POR MATERIA Y MOTOR DEL 75% ==================== */
+function obtenerDiaSemanaDesdeFechaDDMMYYYY(fechaStr) {
+  const norm = normalizarFechaDDMMYYYY(fechaStr);
+  const m = norm.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!m) return "";
+  const d = parseInt(m[1], 10);
+  const mes = parseInt(m[2], 10) - 1;
+  const y = parseInt(m[3], 10);
+  const dateObj = new Date(y, mes, d, 12, 0, 0);
+  const mapaDias = ["DOMINGO", "LUNES", "MARTES", "MIÉRCOLES", "JUEVES", "VIERNES", "SÁBADO"];
+  return mapaDias[dateObj.getDay()] || "";
+}
+
+function normalizarLetraGrupo(grpRaw) {
+  const s = String(grpRaw || "").toUpperCase().trim();
+  if (!s || s === "TEO" || s === "ALL" || s.indexOf("COMPLETO") !== -1) return "ALL";
+  const m = s.match(/(?:GRUPO|GR\.?)\s*([A-Z0-9]+)/i);
+  if (m && m[1]) return m[1].toUpperCase();
+  return s;
+}
+
+function bloqueCoincideConTurnoParte(bloque, turnoGrupoStr) {
+  const tParte = String(turnoGrupoStr || "").toUpperCase().trim();
+  const tBloque = String(bloque.turno || "").toUpperCase().trim();
+  const modBloque = String(bloque.modalidad || "").toUpperCase().trim();
+  const esTalBloque = modBloque === "TALLER" || Boolean(bloque.esTaller) || tBloque.indexOf("TALLER") !== -1;
+  const esTalParte = tParte.indexOf("TALLER") !== -1;
+
+  if (tParte.indexOf("EDUCACIÓN FÍSICA") !== -1 || tParte.indexOf("EDUCACION FISICA") !== -1) {
+    return String(bloque.materia || "").toUpperCase().indexOf("FÍSICA") !== -1 ||
+           String(bloque.materia || "").toUpperCase().indexOf("FISICA") !== -1 ||
+           tBloque.indexOf("FÍSICA") !== -1;
+  }
+
+  if (esTalParte !== esTalBloque) return false;
+
+  const prefTurnoParte = tParte.split(/[\s\-]/)[0]; // TM, TT, TV
+  if (["TM", "TT", "TV"].includes(prefTurnoParte)) {
+    if (tBloque.indexOf(prefTurnoParte) === -1) return false;
+  }
+
+  if (esTalParte) {
+    const mGrpParte = tParte.match(/\(([^)]+)\)/);
+    const grpParte = mGrpParte ? normalizarLetraGrupo(mGrpParte[1]) : normalizarLetraGrupo(tParte);
+    const grpBloque = normalizarLetraGrupo(bloque.grupo);
+    if (grpParte !== "ALL" && grpBloque !== "ALL" && grpParte !== grpBloque) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function obtenerBloquesDelDiaYTurno(fechaDDMMYYYY, turnoGrupoStr) {
+  const diaSemana = obtenerDiaSemanaDesdeFechaDDMMYYYY(fechaDDMMYYYY);
+  if (!diaSemana) return [];
+  const bloques = (estado.horarioParte && estado.horarioParte.bloques) || [];
+  return bloques.filter(b => {
+    const diaB = String(b.dia || "").trim().toUpperCase();
+    return diaB === diaSemana && bloqueCoincideConTurnoParte(b, turnoGrupoStr);
+  });
+}
+
+function renderAsistenciaDocenteDia() {
+  const cont = document.getElementById("contenedorAsistenciaDocenteDia");
+  if (!cont) return;
+
+  const estadoDia = obtenerEstadoDiaActual();
+  if (estadoDia !== "NORMAL") {
+    cont.innerHTML = "";
+    cont.style.display = "none";
+    return;
+  }
+
+  const fechaStr = formatearFechaInput();
+  const turnoRaw = (document.getElementById("asistTurnoGrupo")?.value || "").split("|")[0].trim();
+  const bloquesHoy = obtenerBloquesDelDiaYTurno(fechaStr, turnoRaw);
+  const diaSem = obtenerDiaSemanaDesdeFechaDDMMYYYY(fechaStr);
+
+  if (bloquesHoy.length === 0) {
+    cont.style.display = "block";
+    cont.innerHTML = `
+      <div class="prof-asist-title">
+        <span>👩‍🏫 Asistencia Docente por Materia (${diaSem || "Día"} — ${turnoRaw})</span>
+        <small style="color:#64748b; font-weight:600;">Sin bloques configurados para este día/turno en 🗓️ Horarios Parte</small>
+      </div>
+    `;
+    return;
+  }
+
+  const materiasUnicas = [];
+  bloquesHoy.forEach(b => {
+    const nomMat = String(b.materia || "").trim();
+    if (nomMat && !materiasUnicas.some(m => m.materia === nomMat)) {
+      materiasUnicas.push({
+        materia: nomMat,
+        profesor: b.profesor || "",
+        horario: b.horario || ""
+      });
+    }
+  });
+
+  cont.style.display = "block";
+  let html = `
+    <div class="prof-asist-title">
+      <span>👩‍🏫 Asistencia Docente en ${diaSem} (${turnoRaw}) — Impacta en el 75% de Clases Dictadas</span>
+      <small style="color:#475569;">Tocá una materia si el profesor/a <b>NO asistió</b> (para descontarla de clases dictadas)</small>
+    </div>
+    <div class="prof-pills-wrap">
+  `;
+
+  materiasUnicas.forEach(item => {
+    const sinProf = materiasSinProfesorActual.includes(item.materia);
+    const profTxt = item.profesor ? ` (${item.profesor})` : "";
+    const matEsc = item.materia.replace(/'/g, "\\'");
+    html += `
+      <button type="button" class="prof-chk-pill ${sinProf ? 'sin-profesor' : ''}" onclick="alternarMateriaSinProfesor('${matEsc}')">
+        <span>${sinProf ? '🚫 Sin Profesor:' : '✅ Dictada:'}</span>
+        <strong>${item.materia}</strong>
+        <small>${profTxt}</small>
+      </button>
+    `;
+  });
+
+  html += `</div>`;
+  cont.innerHTML = html;
+}
+
+function alternarMateriaSinProfesor(nombreMat) {
+  const idx = materiasSinProfesorActual.indexOf(nombreMat);
+  if (idx === -1) {
+    materiasSinProfesorActual.push(nombreMat);
+  } else {
+    materiasSinProfesorActual.splice(idx, 1);
+  }
+  renderAsistenciaDocenteDia();
+  actualizarVistaPreviaWA();
+}
+
+function claveMateriaNormalizada(nom) {
+  return String(nom || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^A-Z0-9]/gi, "")
+    .toUpperCase();
+}
+
+function materiasCoincidenNombre(nomPlanilla, nomHorario) {
+  const a = claveMateriaNormalizada(limpiarNombreMateria(nomPlanilla));
+  const b = claveMateriaNormalizada(nomHorario);
+  if (!a || !b) return false;
+  if (a === b || a.indexOf(b) !== -1 || b.indexOf(a) !== -1) return true;
+  if (a.length >= 6 && b.length >= 6 && a.slice(0, 6) === b.slice(0, 6)) return true;
+  return false;
+}
+
+function calcularAsistenciaPorMateriaEstudiante(est) {
+  if (!est) return [];
+  const hist = estado.historialAsistencias || [];
+  const bloquesConfig = (estado.horarioParte && estado.horarioParte.bloques) || [];
+  const grpAluNorm = normalizarLetraGrupo(est.grupo);
+
+  const catalogo = [];
+  obtenerMateriasOrdenadasVisualmente().forEach(m => {
+    if (m.esResumenTallerCB) return;
+    catalogo.push({
+      nombre: limpiarNombreMateria(m.nombre),
+      esTaller: esMateriaDeTaller(m),
+      clasesDictadas: 0,
+      clasesSinProfesor: 0,
+      presentes: 0,
+      tardes: 0,
+      ausentesInjustif: 0,
+      ausentesJustif: 0,
+      fechasAusente: []
+    });
+  });
+
+  bloquesConfig.forEach(b => {
+    const nomB = String(b.materia || "").trim();
+    if (!nomB) return;
+    const existe = catalogo.find(c => materiasCoincidenNombre(c.nombre, nomB));
+    if (!existe) {
+      catalogo.push({
+        nombre: nomB,
+        esTaller: b.modalidad === "TALLER" || Boolean(b.esTaller),
+        clasesDictadas: 0,
+        clasesSinProfesor: 0,
+        presentes: 0,
+        tardes: 0,
+        ausentesInjustif: 0,
+        ausentesJustif: 0,
+        fechasAusente: []
+      });
+    }
+  });
+
+  const copiaHist = [...hist].reverse();
+  copiaHist.forEach(parte => {
+    if (parte.estadoDia && parte.estadoDia !== "NORMAL") return;
+    if (String(parte.nominaAusentes || "").indexOf("[SIN ACTIVIDAD") === 0) return;
+
+    const turnoParte = String(parte.turnoGrupo || "").trim();
+    if (turnoPerteneceATaller(turnoParte)) {
+      const mGrp = turnoParte.match(/\(([^)]+)\)/);
+      const grpParte = mGrp ? normalizarLetraGrupo(mGrp[1]) : normalizarLetraGrupo(turnoParte);
+      if (grpParte !== "ALL" && grpAluNorm !== "ALL" && grpParte !== grpAluNorm) {
+        return;
+      }
+    }
+
+    const bloquesDiaTurno = obtenerBloquesDelDiaYTurno(parte.fecha, turnoParte);
+    if (bloquesDiaTurno.length === 0) return;
+
+    const matsDelParte = [];
+    bloquesDiaTurno.forEach(b => {
+      const grpB = normalizarLetraGrupo(b.grupo);
+      if (grpB !== "ALL" && grpAluNorm !== "ALL" && grpB !== grpAluNorm) return;
+      const nomMat = String(b.materia || "").trim();
+      if (nomMat && !matsDelParte.includes(nomMat)) matsDelParte.push(nomMat);
+    });
+
+    const listaSinProf = Array.isArray(parte.materiasSinProfesor) ? parte.materiasSinProfesor : [];
+    const infoAus = buscarEstudianteEnNominaConDetalle(parte.nominaAusentes, est);
+    const infoTar = buscarEstudianteEnNominaConDetalle(parte.nominaTardes, est);
+    const fCorta = fechaCortaDDMM(parte.fecha);
+
+    matsDelParte.forEach(nomMatHorario => {
+      const regCat = catalogo.find(c => materiasCoincidenNombre(c.nombre, nomMatHorario));
+      if (!regCat) return;
+
+      if (listaSinProf.some(sp => materiasCoincidenNombre(sp, nomMatHorario))) {
+        regCat.clasesSinProfesor++;
+        return;
+      }
+
+      regCat.clasesDictadas++;
+      if (infoAus.presenteEnNomina) {
+        if (infoAus.esJustificada) {
+          regCat.ausentesJustif++;
+          regCat.fechasAusente.push(`${fCorta}(J)`);
+        } else {
+          regCat.ausentesInjustif++;
+          regCat.fechasAusente.push(fCorta);
+        }
+      } else if (infoTar.presenteEnNomina) {
+        regCat.tardes++;
+      } else {
+        regCat.presentes++;
+      }
+    });
+  });
+
+  return catalogo.map(item => {
+    const asistidasEfectivas = item.presentes + item.tardes;
+    const porcentaje = item.clasesDictadas > 0
+      ? Math.round((asistidasEfectivas / item.clasesDictadas) * 100)
+      : 100;
+    return {
+      ...item,
+      asistidasEfectivas: asistidasEfectivas,
+      porcentaje: porcentaje,
+      enRegla75: porcentaje >= 75
+    };
+  });
+}
+
 /* ==================== ESTADO DEL DÍA / TURNO (SIN DOCENTES, SUSPENSIÓN, FERIADO) ==================== */
 const ETIQUETAS_ESTADO_DIA = {
   NORMAL: "Clases Normales",
@@ -409,7 +675,7 @@ function sincronizarMesDesdeFecha() {
     3: "Marzo", 4: "Abril", 5: "Mayo", 6: "Junio", 7: "Julio",
     8: "Agosto", 9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"
   };
-  if (mapaNumAMes[numMes]) {
+  if (mapaNumAMes[numMes] && document.getElementById("asistMes")) {
     document.getElementById("asistMes").value = mapaNumAMes[numMes];
   }
 }
@@ -443,6 +709,7 @@ function alCambiarFechaOTurno() {
 
 function cargarParteGuardadoSiExiste() {
   asistenciaActual = {};
+  materiasSinProfesorActual = [];
   (estado.estudiantes || []).forEach(est => { asistenciaActual[est.filaHoja] = "P"; });
 
   const fechaBuscada = formatearFechaInput();
@@ -489,6 +756,10 @@ function cargarParteGuardadoSiExiste() {
   }
   if (selEstDia) selEstDia.value = estDiaGuardado;
 
+  if (Array.isArray(registroExistente.materiasSinProfesor)) {
+    materiasSinProfesorActual = [...registroExistente.materiasSinProfesor];
+  }
+
   if (estDiaGuardado === "NORMAL" && textoAus && textoAus.toLowerCase() !== "sin ausentes") {
     textoAus.split("|").map(s => s.trim()).forEach(itemStr => {
       const esJust = itemStr.indexOf("[J]") !== -1;
@@ -505,6 +776,7 @@ function cargarParteGuardadoSiExiste() {
     obsGuardada = (divObs[1] || "")
       .replace(/\s*\[ValAus:[0-9.]+\]/g, "")
       .replace(/\s*\[EstDia:[A-Z_]+\]/g, "")
+      .replace(/\s*\[SinProf:[^\]]+\]/g, "")
       .trim();
   }
   if (inpObs) inpObs.value = obsGuardada;
@@ -516,7 +788,8 @@ function cargarParteGuardadoSiExiste() {
   if (banner) {
     banner.className = "edit-mode-banner saved";
     const extraEstado = estDiaGuardado !== "NORMAL" ? ` — [${obtenerEtiquetaMotivoDia(estDiaGuardado)}]` : "";
-    banner.textContent = `📌 Viendo parte guardado del ${fechaBuscada} (${turnoBuscado})${extraEstado}.`;
+    const extraSinProf = materiasSinProfesorActual.length > 0 ? ` — [Sin Prof: ${materiasSinProfesorActual.join(", ")}]` : "";
+    banner.textContent = `📌 Viendo parte guardado del ${fechaBuscada} (${turnoBuscado})${extraEstado}${extraSinProf}.`;
   }
   return true;
 }
@@ -570,7 +843,6 @@ function guardarPreceptorLocal() {
 }
 
 /* ==================== GESTIÓN DE ESTUDIANTES: ORDEN, EDICIÓN, RENUMERACIÓN Y DEDUPLICACIÓN ==================== */
-
 async function alternarEstadoTachado(filaHoja) {
   const est = (estado.estudiantes || []).find(e => e.filaHoja === Number(filaHoja));
   if (!est) return;
@@ -621,7 +893,6 @@ async function editarDatosEstudiante(filaHoja) {
     return;
   }
 
-  // Verificar que el nuevo nombre no duplique a otro estudiante distinto del curso
   const claveNueva = normalizarClaveNombreAlumno(nuevoNombre);
   const duplicado = (estado.estudiantes || []).find(
     e => e.filaHoja !== Number(filaHoja) && normalizarClaveNombreAlumno(e.nombre) === claveNueva
@@ -701,7 +972,6 @@ async function renumerarOrdenEstudiantesCurso(silencioso = false) {
     return;
   }
 
-  // Detectar si además quedaron alumnos duplicados con el mismo Apellido y Nombre
   const vistos = new Map();
   const duplicados = [];
   lista.forEach(est => {
@@ -725,88 +995,18 @@ async function renumerarOrdenEstudiantesCurso(silencioso = false) {
   try {
     mostrarToast("⏳ Corrigiendo numeración y sincronizando con Sheets...");
 
-    // 1. Si había duplicados previos en la hoja, unificar su grupo en el original y limpiar la fila repetida
-    for (const par of duplicados) {
-      if (par.repetido.grupo && par.repetido.grupo !== par.original.grupo) {
-        par.original.grupo = par.repetido.grupo;
-        await fetch(scriptUrl, {
-          method: "POST",
-          headers: { "Content-Type": "text/plain;charset=utf-8" },
-          body: JSON.stringify({
-            accion: "actualizarCelda",
-            curso: estado.cursoActual,
-            filaHoja: par.original.filaHoja,
-            columnaHoja: 3,
-            valor: par.original.grupo
-          })
-        });
-      }
-      for (let col = 1; col <= 4; col++) {
-        await fetch(scriptUrl, {
-          method: "POST",
-          headers: { "Content-Type": "text/plain;charset=utf-8" },
-          body: JSON.stringify({
-            accion: "actualizarCelda",
-            curso: estado.cursoActual,
-            filaHoja: par.repetido.filaHoja,
-            columnaHoja: col,
-            valor: ""
-          })
-        });
-      }
-      delete asistenciaActual[par.repetido.filaHoja];
-    }
+    const respLote = await fetch(scriptUrl, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({
+        accion: "renumerarEstudiantes",
+        curso: estado.cursoActual
+      })
+    });
+    const jsonLote = await respLote.json();
+    if (!jsonLote.ok) throw new Error(jsonLote.error);
 
-    if (duplicados.length > 0) {
-      const filasRepetidas = new Set(duplicados.map(d => d.repetido.filaHoja));
-      estado.estudiantes = (estado.estudiantes || []).filter(e => !filasRepetidas.has(e.filaHoja));
-    }
-
-    // 2. Ordenar por el orden actual (o alfabético si empatan) y reasignar 1, 2, 3...
-    ordenarEstudiantesPorNumero(estado.estudiantes);
-
-    // Intentar primero acción por lote en backend; si el Apps Script aún no fue actualizado, actualizar celda por celda
-    let actualizadoPorLote = false;
-    try {
-      const respLote = await fetch(scriptUrl, {
-        method: "POST",
-        headers: { "Content-Type": "text/plain;charset=utf-8" },
-        body: JSON.stringify({
-          accion: "renumerarEstudiantes",
-          curso: estado.cursoActual
-        })
-      });
-      const jsonLote = await respLote.json();
-      if (jsonLote && jsonLote.ok && jsonLote.data) {
-        aplicarDatosRecibidos(jsonLote.data, true);
-        actualizadoPorLote = true;
-      }
-    } catch (e) {}
-
-    if (!actualizadoPorLote) {
-      for (let i = 0; i < estado.estudiantes.length; i++) {
-        const est = estado.estudiantes[i];
-        const nuevoOrd = i + 1;
-        if (Number(est.orden) !== nuevoOrd) {
-          est.orden = nuevoOrd;
-          await fetch(scriptUrl, {
-            method: "POST",
-            headers: { "Content-Type": "text/plain;charset=utf-8" },
-            body: JSON.stringify({
-              accion: "actualizarCelda",
-              curso: estado.cursoActual,
-              filaHoja: est.filaHoja,
-              columnaHoja: 1,
-              valor: nuevoOrd
-            })
-          });
-        } else {
-          est.orden = nuevoOrd;
-        }
-      }
-      aplicarDatosRecibidos(estado, true);
-    }
-
+    aplicarDatosRecibidos(jsonLote.data, true);
     mostrarToast(`✅ Numeración corregida (1 a ${estado.estudiantes.length})`);
   } catch (err) {
     mostrarToast("⚠️ Error al renumerar: " + err.message, 4000);
@@ -843,7 +1043,7 @@ function actualizarOpcionesTurnoGrupo() {
 }
 
 function obtenerEstudiantesFiltradosAsistencia() {
-  const filtroVal = document.getElementById("asistTurnoGrupo").value || "TT - Teoría|ALL";
+  const filtroVal = document.getElementById("asistTurnoGrupo")?.value || "TT - Teoría|ALL";
   const grupoFiltro = filtroVal.split("|")[1] || "ALL";
 
   return (estado.estudiantes || []).filter(est => {
@@ -854,7 +1054,7 @@ function obtenerEstudiantesFiltradosAsistencia() {
 }
 
 function obtenerEstudiantesTachadosDelFiltro() {
-  const filtroVal = document.getElementById("asistTurnoGrupo").value || "TT - Teoría|ALL";
+  const filtroVal = document.getElementById("asistTurnoGrupo")?.value || "TT - Teoría|ALL";
   const grupoFiltro = filtroVal.split("|")[1] || "ALL";
 
   return (estado.estudiantes || []).filter(est => {
@@ -865,7 +1065,7 @@ function obtenerEstudiantesTachadosDelFiltro() {
 }
 
 function obtenerValorAusenciaActual() {
-  const mod = document.getElementById("asistModalidad").value;
+  const mod = document.getElementById("asistModalidad")?.value || "DOBLE";
   if (mod === "TRIPLE") return 0.33;
   if (mod === "SIMPLE") return 1.0;
   return 0.5;
@@ -875,6 +1075,8 @@ function renderListaAsistencia() {
   const cont = document.getElementById("listaAsistenciaContainer");
   const contTachados = document.getElementById("contenedorTachadosAsistencia");
   if (!cont || !contTachados) return;
+
+  renderAsistenciaDocenteDia();
 
   const lista = obtenerEstudiantesFiltradosAsistencia();
   const listaTachados = obtenerEstudiantesTachadosDelFiltro();
@@ -906,9 +1108,9 @@ function renderListaAsistencia() {
       const totalAnual = (est.inasistencias && est.inasistencias.total) ? est.inasistencias.total : 0;
       let claseBadgeFaltas = "badge-ok";
       let textoAlerta = `Acum: ${totalAnual}`;
-      if (totalAnual >= 28) { claseBadgeFaltas = "badge-danger"; textoAlerta = `🚨 Acum: ${totalAnual} (Límite 28)`; }
-      else if (totalAnual >= 20) { claseBadgeFaltas = "badge-danger"; textoAlerta = `⚠️ Acum: ${totalAnual}`; }
-      else if (totalAnual >= 10) { claseBadgeFaltas = "badge-warn"; textoAlerta = `🔔 Acum: ${totalAnual}`; }
+      if (totalAnual >= 28) { claseBadgeFaltas = "badge-danger"; textoAlerta = `🚨 Acum: ${totalAnual} (Rige 75%)`; }
+      else if (totalAnual >= 20) { claseBadgeFaltas = "badge-danger"; textoAlerta = `⚠️ Acum: ${totalAnual} (Citar 20)`; }
+      else if (totalAnual >= 10) { claseBadgeFaltas = "badge-warn"; textoAlerta = `🔔 Acum: ${totalAnual} (Citar 10)`; }
 
       html += `
         <div class="asist-student-row status-${estadoAlu}">
@@ -917,6 +1119,7 @@ function renderListaAsistencia() {
             <div class="stu-meta">
               <span class="badge badge-grp">${est.grupo || "Sin grupo"}</span>
               <span class="badge ${claseBadgeFaltas}">${textoAlerta}</span>
+              ${totalAnual >= 10 ? `<button type="button" class="btn-outline" style="padding:1px 6px; font-size:10px;" onclick="prepararActaDesdeAlumno(${est.filaHoja}, 'INASISTENCIAS')">📄 Labrar Acta</button>` : ""}
             </div>
           </div>
           <div class="pat-btn-group">
@@ -1039,6 +1242,9 @@ function construirMensajeWhatsApp() {
   }
 
   if (tardes.length > 0) lineas.push(``, `⏰ *Llegadas Tarde (+0.25):*`, ...tardes);
+  if (materiasSinProfesorActual.length > 0) {
+    lineas.push(``, `👩‍🏫 *Sin Profesor en:* ${materiasSinProfesorActual.join(", ")}`);
+  }
   if (obs) lineas.push(``, `📌 *Observaciones:* ${obs}`);
   lineas.push(``, `✍️ *Preceptor/a:* ${preceptor}`);
   return lineas.join("\n");
@@ -1094,6 +1300,7 @@ async function guardarYEnviarWhatsAppBusiness() {
   const motivoDiaTexto = obtenerEtiquetaMotivoDia(estadoDia);
   const mensajeCongelado = construirMensajeWhatsApp();
   const seleccionCongelada = { ...asistenciaActual };
+  const sinProfCongelado = [...materiasSinProfesorActual];
 
   const payload = {
     accion: "registrarAsistencia",
@@ -1104,6 +1311,7 @@ async function guardarYEnviarWhatsAppBusiness() {
     modalidadDia: document.getElementById("asistModalidad").value,
     estadoDia: estadoDia,
     motivoDiaTexto: motivoDiaTexto,
+    materiasSinProfesor: sinProfCongelado,
     preceptor: document.getElementById("asistPreceptor").value.trim(),
     observaciones: document.getElementById("asistObs").value.trim(),
     registros: lista.map(est => ({
@@ -1127,6 +1335,7 @@ async function guardarYEnviarWhatsAppBusiness() {
     if (!json.ok) throw new Error(json.error);
 
     asistenciaActual = seleccionCongelada;
+    materiasSinProfesorActual = sinProfCongelado;
     aplicarDatosRecibidos(json.data, true);
     mostrarToast("✅ Parte guardado en Google Sheets");
     abrirWhatsAppBusinessDirecto(mensajeCongelado);
@@ -1147,17 +1356,19 @@ function renderTablaAcumuladoInasistencias() {
   }
   let html = `<table class="app-table"><thead><tr><th>Ord</th><th>Estudiante</th><th>Grp</th>`;
   MESES_LISTA.forEach(m => { html += `<th>${m.slice(0, 3)}</th>`; });
-  html += `<th>Total</th></tr></thead><tbody>`;
+  html += `<th>Total</th><th>Acción</th></tr></thead><tbody>`;
 
   (estado.estudiantes || []).forEach(est => {
     if (esEstudianteTachado(est)) return;
     const tot = (est.inasistencias && est.inasistencias.total) || 0;
+    const clTot = tot >= 20 ? "cal-rojo" : (tot >= 10 ? "val-TEP" : "");
     html += `<tr><td>${est.orden}</td><td class="td-left">${est.nombre}</td><td>${est.grupo}</td>`;
     MESES_LISTA.forEach(m => {
       const val = (est.inasistencias && est.inasistencias.meses && est.inasistencias.meses[m]) || 0;
       html += `<td>${val > 0 ? val : "-"}</td>`;
     });
-    html += `<td><strong>${tot}</strong></td></tr>`;
+    html += `<td class="${clTot}"><strong>${tot}</strong></td>`;
+    html += `<td><button type="button" class="btn-outline" style="padding:2px 6px; font-size:10.5px;" onclick="prepararActaDesdeAlumno(${est.filaHoja}, 'INASISTENCIAS')">📄 Acta</button></td></tr>`;
   });
   html += `</tbody></table>`;
   cont.innerHTML = html;
@@ -1185,11 +1396,14 @@ function renderHistorialAsistencias() {
     return;
   }
 
-  let html = `<table class="app-table"><thead><tr><th>Acción</th><th>Fecha</th><th>Turno</th><th>P</th><th>A / J</th><th>T</th><th>Detalle Ausentes / Estado del Día</th></tr></thead><tbody>`;
+  let html = `<table class="app-table"><thead><tr><th>Acción</th><th>Fecha</th><th>Turno</th><th>P</th><th>A / J</th><th>T</th><th>Detalle Ausentes / Estado / Profes</th></tr></thead><tbody>`;
   hist.forEach((item, idx) => {
     if (valorActual !== "ALL" && item.turnoGrupo !== valorActual) return;
     const esSinActividad = (item.estadoDia && item.estadoDia !== "NORMAL") || String(item.nominaAusentes || "").indexOf("[SIN ACTIVIDAD") === 0;
     const estiloDetalle = esSinActividad ? "color:#b45309; font-weight:800; font-size:11px;" : "font-size:11px;";
+    const txtSinProf = (item.materiasSinProfesor && item.materiasSinProfesor.length > 0)
+      ? `<br><span style="color:#dc2626; font-weight:700;">🚫 Sin Prof: ${item.materiasSinProfesor.join(", ")}</span>`
+      : "";
     html += `<tr>
       <td><button type="button" class="btn-outline" style="padding:3px 6px; font-size:11px;" onclick="cargarParteDesdeFilaHistorial(${idx})">✏️</button></td>
       <td><strong>${normalizarFechaDDMMYYYY(item.fecha)}</strong></td>
@@ -1197,14 +1411,14 @@ function renderHistorialAsistencias() {
       <td style="color:#15803d;font-weight:800;">${item.presentes}</td>
       <td style="color:#b91c1c;font-weight:800;">${item.ausentes}</td>
       <td style="color:#b45309;font-weight:800;">${item.tardes}</td>
-      <td class="td-left" style="${estiloDetalle}">${item.nominaAusentes}</td>
+      <td class="td-left" style="${estiloDetalle}">${item.nominaAusentes}${txtSinProf}</td>
     </tr>`;
   });
   html += `</tbody></table>`;
   cont.innerHTML = html;
 }
 
-/* ==================== VISTAS DE CALIFICACIONES, FICHA ALUMNO Y PLANILLA ==================== */
+/* ==================== VISTAS DE CALIFICACIONES, FICHA ALUMNO, FAMILIAS Y ACTAS ==================== */
 function limpiarNombreMateria(nombreRaw) {
   return String(nombreRaw || "").replace(/^Materia\s*\d+\s*:\s*/i, "").trim();
 }
@@ -1214,6 +1428,7 @@ function crearSelectorNotaHTML(filaHoja, colHoja, valorActual, tipo, claveCampo 
   const clColor = obtenerClaseColorNota(v);
   const esCampoFinal = (claveCampo === "final");
   const esCampoInt1 = (claveCampo === "int1");
+  const esFam = (typeof esRolFamiliaActual === "function" && esRolFamiliaActual());
 
   let int1BloqueadoPorRegla = false;
   if (esCampoInt1 && objNotasMateria) {
@@ -1225,10 +1440,10 @@ function crearSelectorNotaHTML(filaHoja, colHoja, valorActual, tipo, claveCampo 
     }
   }
 
-  const estaBloqueado = esCampoFinal || esResumenTaller || int1BloqueadoPorRegla;
+  const estaBloqueado = esFam || esCampoFinal || esResumenTaller || int1BloqueadoPorRegla;
 
   const attrDisabled = estaBloqueado
-    ? `disabled style="cursor:not-allowed; opacity:0.85;" title="${esCampoInt1 && int1BloqueadoPorRegla ? 'Solo disponible si el 1° Cuatrimestre es 6 o menos' : 'Se calcula automáticamente'}"`
+    ? `disabled style="cursor:not-allowed; opacity:0.9;" title="${esFam ? 'Modo lectura para familias' : (esCampoInt1 && int1BloqueadoPorRegla ? 'Solo disponible si el 1° Cuatrimestre es 6 o menos' : 'Se calcula automáticamente')}"`
     : "";
 
   if (tipo === "val") {
@@ -1341,7 +1556,7 @@ function actualizarConfigInformeDesdeInputs() {
   if (box && est) box.textContent = construirMensajeWhatsAppAlumno(est);
 }
 
-function materiaCumpleFiltroInforme(mat, est) {
+function materiaCumpleFiltroInforme(mat) {
   const esTal = esMateriaDeTaller(mat);
   if (configInformeAlumno.ambito === "TALLER" && !esTal) return false;
   if (configInformeAlumno.ambito === "TEORIA" && esTal) return false;
@@ -1402,7 +1617,7 @@ function construirMensajeWhatsAppAlumno(est) {
   if (configInformeAlumno.ambito === "TODO" || configInformeAlumno.ambito === "TEORIA") lineas.push(`• *Días Aus./Tarde Teoría:* ${fechasTeoFinal.length > 0 ? fechasTeoFinal.join(", ") : "Sin registros"}`);
   if (configInformeAlumno.ambito === "TODO" || configInformeAlumno.ambito === "TALLER") lineas.push(`• *Días Aus./Tarde Taller:* ${fechasTalFinal.length > 0 ? fechasTalFinal.join(", ") : "Sin registros"}`);
 
-  const materiasOrdenadas = obtenerMateriasOrdenadasVisualmente().filter(m => materiaCumpleFiltroInforme(m, est));
+  const materiasOrdenadas = obtenerMateriasOrdenadasVisualmente().filter(m => materiaCumpleFiltroInforme(m));
   const matsTeoria = materiasOrdenadas.filter(m => !esMateriaDeTaller(m));
   const matsTaller = materiasOrdenadas.filter(m => esMateriaDeTaller(m));
 
@@ -1426,7 +1641,8 @@ function enviarInformeAlumnoWhatsApp() {
   const filaSel = parseInt(document.getElementById("alumnoSelect")?.value || "0", 10);
   const est = (estado.estudiantes || []).find(e => e.filaHoja === filaSel);
   if (!est) return;
-  abrirWhatsAppBusinessDirecto(construirMensajeWhatsAppAlumno(est), configInformeAlumno.telefonoPadre);
+  const tel = configInformeAlumno.telefonoPadre || est.telefonoFamilia || "";
+  abrirWhatsAppBusinessDirecto(construirMensajeWhatsAppAlumno(est), tel);
 }
 
 async function copiarInformeAlumnoPortapapeles() {
@@ -1453,7 +1669,7 @@ function construirTalonComunicadoHTML(est) {
   const fechasTalFinal = combinarFechasDetectadasYExtra(fechasHist.taller, configInformeAlumno.fechasExtraTal);
   const etiquetaAmbito = configInformeAlumno.ambito === "TALLER" ? "SOLO TALLER" : (configInformeAlumno.ambito === "TEORIA" ? "SOLO TEORÍA" : "TEORÍA + TALLER");
 
-  const materiasFiltradas = obtenerMateriasOrdenadasVisualmente().filter(m => materiaCumpleFiltroInforme(m, est));
+  const materiasFiltradas = obtenerMateriasOrdenadasVisualmente().filter(m => materiaCumpleFiltroInforme(m));
   let filasTabla = "";
   materiasFiltradas.forEach(mat => {
     const esTal = esMateriaDeTaller(mat);
@@ -1481,6 +1697,7 @@ function construirTalonComunicadoHTML(est) {
       </div>
       <div class="com-student-strip">
         <div><strong>ESTUDIANTE:</strong> ${est.orden}. ${est.nombre}</div>
+        <div><strong>DNI:</strong> ${est.dni || "-"}</div>
         <div><strong>GRUPO:</strong> ${est.grupo || "-"}</div>
         <div><strong>TOTAL INASISTENCIAS:</strong> ${totFaltas}</div>
       </div>
@@ -1514,6 +1731,7 @@ function imprimirComunicadoAlumnoActual() {
   const est = (estado.estudiantes || []).find(e => e.filaHoja === filaSel);
   if (!est) return;
   document.getElementById("printComunicadosRoot").innerHTML = construirTalonComunicadoHTML(est);
+  document.body.classList.remove("print-mode-acta");
   document.body.classList.add("print-mode-comunicado");
   window.print();
   setTimeout(() => document.body.classList.remove("print-mode-comunicado"), 600);
@@ -1523,74 +1741,551 @@ function imprimirComunicadosCursoCompleto() {
   const activos = (estado.estudiantes || []).filter(e => !esEstudianteTachado(e));
   if (activos.length === 0) return mostrarToast("No hay alumnos activos");
   document.getElementById("printComunicadosRoot").innerHTML = activos.map(est => construirTalonComunicadoHTML(est)).join("");
+  document.body.classList.remove("print-mode-acta");
   document.body.classList.add("print-mode-comunicado");
   window.print();
   setTimeout(() => document.body.classList.remove("print-mode-comunicado"), 600);
+}
+
+/* ==================== GUARDADO DE DATOS FAMILIA Y NOTIFICACIONES POR EMAIL ==================== */
+async function guardarDatosFamiliaUI(filaHoja) {
+  const est = (estado.estudiantes || []).find(e => e.filaHoja === Number(filaHoja));
+  if (!est) return;
+
+  const dni = document.getElementById("famInputDni")?.value.trim() || "";
+  const adulto = document.getElementById("famInputAdulto")?.value.trim() || "";
+  const email = document.getElementById("famInputEmail")?.value.trim() || "";
+  const tel = document.getElementById("famInputTel")?.value.trim() || "";
+  const resetClave = document.getElementById("famChkResetClave")?.checked || false;
+
+  try {
+    mostrarToast("⏳ Guardando legajo familiar y habilitando DNI...");
+    const resp = await fetch(scriptUrl, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({
+        accion: "guardarDatosFamiliaEstudiante",
+        curso: estado.cursoActual,
+        datosFamilia: {
+          orden: est.orden,
+          nombre: est.nombre,
+          dni: dni,
+          adultoResponsable: adulto,
+          emailFamilia: email,
+          telefonoFamilia: tel,
+          resetearClave: resetClave
+        }
+      })
+    });
+    const json = await resp.json();
+    if (!json.ok) throw new Error(json.error);
+
+    aplicarDatosRecibidos(json.data, true);
+    mostrarToast(`✅ Legajo familiar guardado (Ingreso habilitado con DNI: ${dni || 'S/D'})`, 4000);
+  } catch (err) {
+    mostrarToast("⚠️ Error: " + err.message, 4000);
+  }
+}
+
+function aplicarPlantillaNotificacionAlumno(tipoPlantilla, filaHoja) {
+  const est = (estado.estudiantes || []).find(e => e.filaHoja === Number(filaHoja));
+  if (!est) return;
+
+  const totFaltas = (est.inasistencias && est.inasistencias.total) || 0;
+  const cursoLimpio = (estado.cursoActual || "").replace(/_/g, " ");
+  const inpTipo = document.getElementById("notifInputTipo");
+  const inpAsunto = document.getElementById("notifInputAsunto");
+  const inpMensaje = document.getElementById("notifInputMensaje");
+
+  if (tipoPlantilla === "10_FALTAS") {
+    if (inpTipo) inpTipo.value = "CITACION_10";
+    if (inpAsunto) inpAsunto.value = `Notificación y Citación por 10 Inasistencias Acumuladas (${totFaltas})`;
+    if (inpMensaje) {
+      inpMensaje.value =
+        `Estimada familia de ${est.nombre} (${cursoLimpio}):\n\n` +
+        `Por medio de la presente notificamos que el/la estudiante registra a la fecha un total de ${totFaltas} inasistencias.\n` +
+        `Habiendo alcanzado las 10 inasistencias en el marco de la Resolución N° 1650/24, solicitamos la presencia del adulto responsable en la escuela para firmar el acta de compromiso de asistencia a clases.`;
+    }
+  } else if (tipoPlantilla === "20_FALTAS") {
+    if (inpTipo) inpTipo.value = "CITACION_20";
+    if (inpAsunto) inpAsunto.value = `URGENTE: Citación por 20 Inasistencias Acumuladas (${totFaltas})`;
+    if (inpMensaje) {
+      inpMensaje.value =
+        `Estimada familia de ${est.nombre} (${cursoLimpio}):\n\n` +
+        `Notificamos que el/la estudiante ha alcanzado un total de ${totFaltas} inasistencias acumuladas en el ciclo lectivo.\n` +
+        `Conforme a la Resolución N° 1650/24, solicitamos la presencia del adulto responsable en el establecimiento a fin de labrar el acta correspondiente y acordar pautas de acompañamiento para evitar llegar al límite anual de 28 inasistencias.`;
+    }
+  } else if (tipoPlantilla === "28_FALTAS") {
+    if (inpTipo) inpTipo.value = "CITACION_28";
+    if (inpAsunto) inpAsunto.value = `CITACIÓN PRIORITARIA: 28 Inasistencias — Rige 75% de Asistencia por Materia`;
+    if (inpMensaje) {
+      inpMensaje.value =
+        `Estimada familia de ${est.nombre} (${cursoLimpio}):\n\n` +
+        `Notificamos que el/la estudiante registra ${totFaltas} inasistencias, habiendo alcanzado el límite de 28 inasistencias anuales previsto en la Resolución N° 1650/24.\n` +
+        `A partir de esta instancia pasa a contabilizarse el 75% de asistencia sobre las clases efectivamente dictadas en cada materia (Teoría y Taller), debiendo intensificar aquellas materias que no alcancen dicho porcentaje.\n` +
+        `Se cita al adulto responsable en el establecimiento.`;
+    }
+  } else if (tipoPlantilla === "CITACION_GRAL") {
+    if (inpTipo) inpTipo.value = "CITACION_FAMILIA";
+    if (inpAsunto) inpAsunto.value = `Citación Presencial de Familia - E.E.S.T. N° 2 San Fernando`;
+    if (inpMensaje) {
+      inpMensaje.value =
+        `Estimada familia de ${est.nombre} (${cursoLimpio}):\n\n` +
+        `Solicitamos la presencia del adulto responsable en la escuela en la fecha y horario indicados a fin de mantener una reunión sobre la trayectoria escolar del/de la estudiante.`;
+    }
+  }
+}
+
+async function enviarNotificacionFamiliaUI(filaHoja) {
+  const est = (estado.estudiantes || []).find(e => e.filaHoja === Number(filaHoja));
+  if (!est) return;
+
+  const tipo = document.getElementById("notifInputTipo")?.value || "COMUNICADO";
+  const asunto = document.getElementById("notifInputAsunto")?.value.trim() || "";
+  const mensaje = document.getElementById("notifInputMensaje")?.value.trim() || "";
+  const fechaCitRaw = document.getElementById("notifInputFechaCit")?.value || "";
+  const horaCit = document.getElementById("notifInputHoraCit")?.value.trim() || "";
+  const emailDest = document.getElementById("notifInputEmailDest")?.value.trim() || est.emailFamilia || "";
+
+  if (!asunto || !mensaje) {
+    mostrarToast("⚠️ Completá el asunto y el mensaje de la notificación");
+    return;
+  }
+
+  let fechaCitFormateada = "";
+  if (fechaCitRaw && /^\d{4}-\d{2}-\d{2}$/.test(fechaCitRaw)) {
+    const [y, m, d] = fechaCitRaw.split("-");
+    fechaCitFormateada = `${d}/${m}/${y}`;
+  }
+
+  try {
+    mostrarToast("⏳ Enviando notificación y correo electrónico...");
+    const resp = await fetch(scriptUrl, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({
+        accion: "enviarNotificacionFamilia",
+        curso: estado.cursoActual,
+        notificacion: {
+          ordenAlumno: est.orden,
+          nombreAlumno: est.nombre,
+          dniAlumno: est.dni || "",
+          tipo: tipo,
+          asunto: asunto,
+          mensaje: mensaje,
+          fechaCitacion: fechaCitFormateada,
+          horaCitacion: horaCit,
+          emailDestino: emailDest
+        }
+      })
+    });
+    const json = await resp.json();
+    if (!json.ok) throw new Error(json.error);
+
+    aplicarDatosRecibidos(json.data, true);
+    mostrarToast(json.emailEnviado ? `📧 Notificación enviada por Email y App` : `📌 Guardada en App (${json.detalleEmail})`, 4500);
+  } catch (err) {
+    mostrarToast("⚠️ Error: " + err.message, 4000);
+  }
+}
+
+async function confirmarLecturaNotificacionUI(idNotif) {
+  try {
+    mostrarToast("⏳ Registrando confirmación de lectura...");
+    const resp = await fetch(scriptUrl, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({
+        accion: "confirmarLecturaNotificacion",
+        curso: estado.cursoActual,
+        idNotificacion: idNotif
+      })
+    });
+    const json = await resp.json();
+    if (!json.ok) throw new Error(json.error);
+
+    aplicarDatosRecibidos(json.data, true);
+    mostrarToast("✅ Recepción confirmada con fecha y hora");
+  } catch (err) {
+    mostrarToast("⚠️ Error: " + err.message, 4000);
+  }
+}
+
+async function eliminarNotificacionUI(idNotif) {
+  if (!confirm("¿Eliminar este registro de notificación?")) return;
+  try {
+    const resp = await fetch(scriptUrl, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({
+        accion: "eliminarNotificacionFamilia",
+        curso: estado.cursoActual,
+        idNotificacion: idNotif
+      })
+    });
+    const json = await resp.json();
+    if (!json.ok) throw new Error(json.error);
+    aplicarDatosRecibidos(json.data, true);
+    mostrarToast("🗑️ Notificación eliminada");
+  } catch (err) {
+    mostrarToast("⚠️ Error: " + err.message, 4000);
+  }
+}
+
+/* ==================== RENDER DE GRÁFICOS Y FICHA COMPLETA DEL ALUMNO ==================== */
+function construirSeccionGraficosAsistenciaHTML(est, resumenPorMateria) {
+  const totFaltas = (est.inasistencias && est.inasistencias.total) || 0;
+  const partesNormales = (estado.historialAsistencias || []).filter(
+    h => (!h.estadoDia || h.estadoDia === "NORMAL") && String(h.nominaAusentes || "").indexOf("[SIN ACTIVIDAD") === -1
+  );
+  let jornadasEstimadas = 0;
+  const fechasUnicasNormales = new Set(partesNormales.map(p => normalizarFechaDDMMYYYY(p.fecha)).filter(Boolean));
+  jornadasEstimadas = Math.max(fechasUnicasNormales.size, Math.ceil(totFaltas + 10), 40);
+
+  const porcentajeAnual = Math.max(0, Math.min(100, Math.round(((jornadasEstimadas - totFaltas) / jornadasEstimadas) * 100)));
+  let colorAnillo = "#16a34a";
+  let textoEstadoAnual = "En regla (< 10 faltas)";
+  if (totFaltas >= 28) {
+    colorAnillo = "#dc2626";
+    textoEstadoAnual = "🚨 Límite 28 alcanzado (Rige 75% por materia)";
+  } else if (totFaltas >= 20) {
+    colorAnillo = "#ea580c";
+    textoEstadoAnual = "⚠️ Alerta 20 inasistencias (2° Citación)";
+  } else if (totFaltas >= 10) {
+    colorAnillo = "#d97706";
+    textoEstadoAnual = "🔔 Alerta 10 inasistencias (1° Citación)";
+  }
+
+  let maxMes = 4;
+  MESES_LISTA.forEach(m => {
+    const v = Number((est.inasistencias && est.inasistencias.meses && est.inasistencias.meses[m]) || 0);
+    if (v > maxMes) maxMes = v;
+  });
+
+  let barrasHTML = "";
+  MESES_LISTA.forEach(m => {
+    const val = Number((est.inasistencias && est.inasistencias.meses && est.inasistencias.meses[m]) || 0);
+    const pctAltura = val > 0 ? Math.max(12, Math.round((val / maxMes) * 100)) : 4;
+    const colorBarra = val >= 4 ? "#dc2626" : (val >= 2 ? "#d97706" : (val > 0 ? "#2563eb" : "#cbd5e1"));
+    barrasHTML += `
+      <div class="bar-month-col">
+        <span class="bar-month-val">${val > 0 ? val : "0"}</span>
+        <div class="bar-month-fill" style="height:${pctAltura}%; background:${colorBarra};" title="${m}: ${val} inasistencias"></div>
+        <span class="bar-month-lbl">${m.slice(0, 3)}</span>
+      </div>
+    `;
+  });
+
+  let filas75 = "";
+  resumenPorMateria.forEach(rm => {
+    const badgeEstado = rm.clasesDictadas === 0
+      ? `<span class="badge badge-grp">Sin partes cargados</span>`
+      : (rm.enRegla75
+          ? `<span class="badge badge-ok">✅ Cumple (${rm.porcentaje}%)</span>`
+          : `<span class="badge badge-danger">⚠️ Intensifica (${rm.porcentaje}% < 75%)</span>`);
+
+    filas75 += `
+      <tr>
+        <td class="td-left">${rm.esTaller ? '🔧' : '📘'} ${rm.nombre}</td>
+        <td><strong>${rm.clasesDictadas}</strong>${rm.clasesSinProfesor > 0 ? ` <small style="color:#b91c1c;">(-${rm.clasesSinProfesor} s/prof)</small>` : ''}</td>
+        <td style="color:#15803d; font-weight:800;">${rm.asistidasEfectivas}</td>
+        <td style="color:#b91c1c; font-weight:800;">${rm.ausentesInjustif}${rm.ausentesJustif > 0 ? ` <small style="color:#6d28d9;">(+${rm.ausentesJustif} J)</small>` : ''}</td>
+        <td><strong>${rm.clasesDictadas > 0 ? rm.porcentaje + '%' : '100%'}</strong></td>
+        <td>${badgeEstado}</td>
+      </tr>
+    `;
+  });
+
+  return `
+    <div class="charts-grid-box">
+      <div class="chart-card">
+        <strong style="font-size:12.5px; color:#0f172a; text-align:center;">📈 Porcentaje de Asistencia Anual</strong>
+        <div class="donut-ring" style="background: conic-gradient(${colorAnillo} 0% ${porcentajeAnual}%, #e2e8f0 ${porcentajeAnual}% 100%);">
+          <div class="donut-inner">
+            <strong style="color:${colorAnillo};">${porcentajeAnual}%</strong>
+            <small>Asistencia</small>
+          </div>
+        </div>
+        <div style="font-size:12px; font-weight:800; color:#0f172a; text-align:center;">
+          Inasistencias Acumuladas: <span style="color:${colorAnillo};">${totFaltas}</span> / 28
+        </div>
+        <div style="font-size:11px; color:#475569; font-weight:700; margin-top:4px; text-align:center;">
+          ${textoEstadoAnual}
+        </div>
+      </div>
+
+      <div class="chart-card" style="align-items:stretch;">
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px; margin-bottom:4px;">
+          <strong style="font-size:12.5px; color:#0f172a;">📊 Evolución Mensual de Inasistencias (Marzo a Diciembre)</strong>
+          <span style="font-size:11px; color:#64748b; font-weight:700;">Umbrales de citación: 10 • 20 • 28 faltas</span>
+        </div>
+        <div class="bars-monthly-wrap">${barrasHTML}</div>
+      </div>
+    </div>
+
+    <div class="panel" style="margin-bottom:14px; border:1px solid #cbd5e1;">
+      <div class="panel-title" style="margin-bottom:6px;">
+        <span>📐 Control del 75% de Asistencia por Materia (Cruce de Partes Diarios y Horario de Clases Dictadas)</span>
+        <span class="badge ${totFaltas >= 28 ? 'badge-danger' : 'badge-grp'}">
+          ${totFaltas >= 28 ? '🚨 ACTIVO POR SUPERAR 28 FALTAS (Res. 1650/24)' : 'ℹ️ Seguimiento Preventivo por Asignatura'}
+        </span>
+      </div>
+      <p style="font-size:11.5px; color:#475569; margin-bottom:8px;">
+        Se contabilizan únicamente las <b>clases efectivamente dictadas</b> (partes con estado Normal donde asistió el profesor/a de la materia).
+      </p>
+      <div class="table-wrap">
+        <table class="app-table">
+          <thead>
+            <tr>
+              <th>Materia</th>
+              <th>Clases Dictadas</th>
+              <th>Asistidas (P/T)</th>
+              <th>Ausencias (A/J)</th>
+              <th>% Asistencia</th>
+              <th>Situación (Mín. 75%)</th>
+            </tr>
+          </thead>
+          <tbody>${filas75 || '<tr><td colspan="6">Sin materias configuradas.</td></tr>'}</tbody>
+        </table>
+      </div>
+    </div>
+  `;
 }
 
 function renderVistaAlumno() {
   const cont = document.getElementById("contenedorFichaAlumno");
   if (!cont) return;
   const filaSel = parseInt(document.getElementById("alumnoSelect")?.value || "0", 10);
-  const est = (estado.estudiantes || []).find(e => e.filaHoja === filaSel);
-  if (!est) return;
+  const est = (estado.estudiantes || []).find(e => e.filaHoja === filaSel) || (estado.estudiantes || [])[0];
+  if (!est) {
+    cont.innerHTML = `<p style="padding:12px; color:#64748b;">No se encontró el legajo del estudiante.</p>`;
+    return;
+  }
 
+  const esFam = (typeof esRolFamiliaActual === "function" && esRolFamiliaActual());
   const tachado = esEstudianteTachado(est);
   const totFaltas = (est.inasistencias && est.inasistencias.total) || 0;
   const amb = configInformeAlumno.ambito;
   const nombreApp = obtenerEtiquetaAppWA();
+  const resumenPorMateria = calcularAsistenciaPorMateriaEstudiante(est);
 
-  let html = `
+  const claveEst = normalizarClaveNombreAlumno(est.nombre);
+  const notifsEst = (estado.notificacionesCurso || []).filter(n => {
+    if (n.nombreAlumno === "CURSO COMPLETO" || n.ordenAlumno === "TODOS") return true;
+    if (est.dni && n.dniAlumno && String(est.dni) === String(n.dniAlumno)) return true;
+    return normalizarClaveNombreAlumno(n.nombreAlumno) === claveEst;
+  });
+  const pendientesLectura = notifsEst.filter(n => n.estadoLectura !== "NOTIFICADO");
+
+  let html = "";
+
+  if (pendientesLectura.length > 0) {
+    html += `
+      <div class="notif-banner-pending">
+        <strong style="font-size:14px; color:#b45309; display:block; margin-bottom:6px;">
+          🔔 Tenés ${pendientesLectura.length} comunicado(s) o citación(es) oficial(es) pendiente(s) de confirmación
+        </strong>
+    `;
+    pendientesLectura.forEach(n => {
+      html += `
+        <div class="notif-item-card unread" style="margin-bottom:8px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px;">
+            <strong style="color:#0f172a; font-size:13px;">📌 ${n.asunto}</strong>
+            <span class="badge badge-warn">${n.fechaHora}</span>
+          </div>
+          <p style="font-size:12.5px; color:#1e293b; white-space:pre-wrap; margin:6px 0;">${n.mensaje}</p>
+          ${n.fechaCitacion ? `<div style="font-size:12px; font-weight:800; color:#b45309; margin-bottom:6px;">📅 Fecha de Citación en la Escuela: ${n.fechaCitacion} ${n.horaCitacion ? 'a las ' + n.horaCitacion + ' hs' : ''}</div>` : ''}
+          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-top:6px;">
+            <small style="color:#64748b; font-weight:700;">Emitido por: ${n.emitidoPor}</small>
+            <button type="button" class="btn-main btn-w4b" style="padding:7px 14px; font-size:12px;" onclick="confirmarLecturaNotificacionUI('${n.id}')">
+              ✅ Confirmar Recepción y Lectura
+            </button>
+          </div>
+        </div>
+      `;
+    });
+    html += `</div>`;
+  }
+
+  html += `
     <div class="student-admin-bar">
       <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
         <div>
-          <div class="stu-name ${tachado ? 'tachado-text' : ''}" style="font-size:15px;">${est.orden}. ${est.nombre}</div>
+          <div class="stu-name ${tachado ? 'tachado-text' : ''}" style="font-size:15.5px;">${est.orden}. ${est.nombre}</div>
           <div style="font-size:12px; color:#475569; margin-top:3px;">
-            <strong>Orden N°:</strong> ${est.orden} &nbsp;|&nbsp; <strong>Grupo:</strong> ${est.grupo} &nbsp;|&nbsp; <strong>Estado:</strong> ${est.estado || 'Activo'} &nbsp;|&nbsp; <strong>Faltas:</strong> ${totFaltas}
+            <strong>Curso:</strong> ${(estado.cursoActual || "").replace(/_/g, " ")} &nbsp;|&nbsp;
+            <strong>DNI:</strong> ${est.dni || "Sin cargar"} &nbsp;|&nbsp;
+            <strong>Grupo:</strong> ${est.grupo} &nbsp;|&nbsp;
+            <strong>Faltas Acumuladas:</strong> <b style="color:#b91c1c;">${totFaltas}</b>
           </div>
         </div>
+        ${!esFam ? `
         <div style="display:flex; gap:6px; flex-wrap:wrap;">
-          <button type="button" class="btn-outline" onclick="editarDatosEstudiante(${est.filaHoja})">✏️ Editar Orden / Datos</button>
-          <button type="button" class="btn-outline" onclick="renumerarOrdenEstudiantesCurso(false)">🔢 Renumerar Curso</button>
+          <button type="button" class="btn-outline" onclick="prepararActaDesdeAlumno(${est.filaHoja}, 'INASISTENCIAS')">📄 Labrar Acta (10/20/28)</button>
+          <button type="button" class="btn-outline" onclick="prepararActaDesdeAlumno(${est.filaHoja}, 'INCOMPARECENCIA')">📄 Acta Incomparecencia</button>
+          <button type="button" class="btn-outline" onclick="editarDatosEstudiante(${est.filaHoja})">✏️ Editar Orden / Nombre</button>
           ${tachado ? `<button type="button" class="btn-success-outline" onclick="alternarEstadoTachado(${est.filaHoja})">✅ Activar</button>` : `<button type="button" class="btn-danger-outline" onclick="alternarEstadoTachado(${est.filaHoja})">🚫 Tachar</button>`}
-          <button type="button" class="btn-danger-outline" onclick="eliminarEstudianteDeMatricula(${est.filaHoja})">🗑️</button>
-        </div>
+        </div>` : ''}
       </div>
-    </div>
-
-    <div class="report-config-card">
-      <strong style="font-size:13.5px; color:#15803d;">📲 Comunicado Individual para Familias (WhatsApp y PDF)</strong>
-      <div class="scope-pill-bar">
-        <button type="button" class="scope-pill ${amb === 'TODO' ? 'active-TODO' : ''}" onclick="cambiarAmbitoInformeAlumno('TODO')">📋 Todo</button>
-        <button type="button" class="scope-pill ${amb === 'TALLER' ? 'active-TALLER' : ''}" onclick="cambiarAmbitoInformeAlumno('TALLER')">🔧 Solo Taller</button>
-        <button type="button" class="scope-pill ${amb === 'TEORIA' ? 'active-TEORIA' : ''}" onclick="cambiarAmbitoInformeAlumno('TEORIA')">📘 Solo Teoría</button>
-      </div>
-      <div class="form-grid">
-        <div class="form-group"><label>WhatsApp Familiar</label><input type="tel" id="infTelefonoPadre" placeholder="Ej: 1123456789" value="${configInformeAlumno.telefonoPadre || ""}" oninput="actualizarConfigInformeDesdeInputs()"></div>
-        <div class="form-group">
-          <label>📲 App de WhatsApp</label>
-          <select id="infTipoAppWA" onchange="cambiarPreferenciaAppWA(this.value)">
-            <option value="W4B" ${preferenciaAppWA === "W4B" ? "selected" : ""}>WhatsApp Business</option>
-            <option value="PERSONAL" ${preferenciaAppWA === "PERSONAL" ? "selected" : ""}>WhatsApp Personal (Común)</option>
-          </select>
-        </div>
-        <div class="form-group"><label>Fechas Teoría Extra</label><input type="text" id="infFechasExtraTeo" value="${configInformeAlumno.fechasExtraTeo || ""}" oninput="actualizarConfigInformeDesdeInputs()"></div>
-        <div class="form-group"><label>Fechas Taller Extra</label><input type="text" id="infFechasExtraTal" value="${configInformeAlumno.fechasExtraTal || ""}" oninput="actualizarConfigInformeDesdeInputs()"></div>
-        <div class="form-group"><label>Nota Opcional</label><input type="text" id="infNotaAdicional" value="${configInformeAlumno.notaAdicional || ""}" oninput="actualizarConfigInformeDesdeInputs()"></div>
-      </div>
-      <div class="action-buttons" style="margin-top:10px;">
-        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:8px;">
-          <button type="button" id="btnEnviarWAAlumno" class="btn-main btn-w4b" onclick="enviarInformeAlumnoWhatsApp()">📲 Enviar por ${nombreApp}</button>
-          <button type="button" class="btn-main btn-print-blue" onclick="imprimirComunicadoAlumnoActual()">🖨️ Imprimir Talón Cuaderno</button>
-        </div>
-        <div style="display:flex; gap:8px; flex-wrap:wrap;">
-          <button type="button" class="btn-outline" style="flex:1;" onclick="copiarInformeAlumnoPortapapeles()">📋 Copiar Texto</button>
-          <button type="button" class="btn-outline" style="flex:1;" onclick="imprimirComunicadosCursoCompleto()">🖨️ Imprimir Lote Todo el Curso</button>
-        </div>
-      </div>
-      <div class="wa-preview-box" id="waAlumnoPreviewBox">${construirMensajeWhatsAppAlumno(est)}</div>
     </div>
   `;
+
+  html += construirSeccionGraficosAsistenciaHTML(est, resumenPorMateria);
+
+  if (!esFam) {
+    html += `
+      <div class="panel" style="background:#f8fafc; border:1px solid #93c5fd; margin-bottom:14px;">
+        <div class="panel-title">
+          <span>🔐 Legajo Familiar: Acceso por DNI del Estudiante y Correo Oficial</span>
+        </div>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>DNI del Estudiante (Usuario y Clave Familiar)</label>
+            <input type="text" id="famInputDni" placeholder="Solo números, ej: 48123456" value="${est.dni || ''}">
+          </div>
+          <div class="form-group">
+            <label>Adulto Responsable (Apellido y Nombre)</label>
+            <input type="text" id="famInputAdulto" placeholder="Ej: GÓMEZ MARÍA" value="${est.adultoResponsable || ''}">
+          </div>
+          <div class="form-group">
+            <label>Email de la Familia (Recibe avisos de @abc.gob.ar)</label>
+            <input type="email" id="famInputEmail" placeholder="familia@email.com" value="${est.emailFamilia || ''}">
+          </div>
+          <div class="form-group">
+            <label>Teléfono / WhatsApp Familiar</label>
+            <input type="tel" id="famInputTel" placeholder="Ej: 1123456789" value="${est.telefonoFamilia || ''}">
+          </div>
+        </div>
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-top:10px;">
+          <label style="font-size:12px; color:#334155; font-weight:700; display:flex; align-items:center; gap:6px; cursor:pointer;">
+            <input type="checkbox" id="famChkResetClave">
+            Restablecer contraseña de la familia igual al N° de DNI
+          </label>
+          <button type="button" class="btn-main btn-print-blue" style="padding:8px 14px; font-size:12.5px;" onclick="guardarDatosFamiliaUI(${est.filaHoja})">
+            💾 Guardar DNI / Email y Habilitar Acceso Familiar
+          </button>
+        </div>
+      </div>
+
+      <div class="panel" style="background:#eff6ff; border:1px solid #bfdbfe; margin-bottom:14px;">
+        <div class="panel-title">
+          <span>📧 Emitir Notificación / Citación Oficial (Envío Automático por Email @abc.gob.ar y Portal Familias)</span>
+        </div>
+        <div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px;">
+          <button type="button" class="btn-outline" onclick="aplicarPlantillaNotificacionAlumno('10_FALTAS', ${est.filaHoja})">🔔 Plantilla 10 Faltas</button>
+          <button type="button" class="btn-outline" onclick="aplicarPlantillaNotificacionAlumno('20_FALTAS', ${est.filaHoja})">⚠️ Plantilla 20 Faltas</button>
+          <button type="button" class="btn-outline" onclick="aplicarPlantillaNotificacionAlumno('28_FALTAS', ${est.filaHoja})">🚨 Plantilla 28 Faltas (75%)</button>
+          <button type="button" class="btn-outline" onclick="aplicarPlantillaNotificacionAlumno('CITACION_GRAL', ${est.filaHoja})">📅 Citación de Familia</button>
+        </div>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Tipo de Aviso</label>
+            <select id="notifInputTipo">
+              <option value="COMUNICADO">Comunicado Institucional</option>
+              <option value="CITACION_10">1° Citación (10 Inasistencias)</option>
+              <option value="CITACION_20">2° Citación (20 Inasistencias)</option>
+              <option value="CITACION_28">3° Citación (28 Inasistencias - 75%)</option>
+              <option value="CITACION_FAMILIA">Citación Presencial de Familia</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Email Destino Familiar</label>
+            <input type="email" id="notifInputEmailDest" value="${est.emailFamilia || ''}" placeholder="Cargá el email arriba o acá">
+          </div>
+          <div class="form-group">
+            <label>Fecha de Citación (Si aplica)</label>
+            <input type="date" id="notifInputFechaCit">
+          </div>
+          <div class="form-group">
+            <label>Hora de Citación (Si aplica)</label>
+            <input type="time" id="notifInputHoraCit" value="14:00">
+          </div>
+        </div>
+        <div class="form-group" style="margin-top:8px;">
+          <label>Asunto de la Notificación</label>
+          <input type="text" id="notifInputAsunto" placeholder="Ej: Citación por Inasistencias Acumuladas">
+        </div>
+        <div class="form-group" style="margin-top:8px;">
+          <label>Mensaje Oficial</label>
+          <textarea id="notifInputMensaje" rows="4" placeholder="Escribí el mensaje o tocá una de las plantillas rápidas de arriba..."></textarea>
+        </div>
+        <div style="display:flex; justify-content:flex-end; margin-top:10px;">
+          <button type="button" class="btn-main btn-print-blue" style="padding:9px 16px; font-size:13px;" onclick="enviarNotificacionFamiliaUI(${est.filaHoja})">
+            📧 Enviar Correo Oficial y Publicar en Portal de la Familia
+          </button>
+        </div>
+      </div>
+
+      <div class="report-config-card">
+        <strong style="font-size:13.5px; color:#15803d;">📲 Comunicado Individual Rápido (WhatsApp y Talón Imprimible Cuaderno)</strong>
+        <div class="scope-pill-bar">
+          <button type="button" class="scope-pill ${amb === 'TODO' ? 'active-TODO' : ''}" onclick="cambiarAmbitoInformeAlumno('TODO')">📋 Todo</button>
+          <button type="button" class="scope-pill ${amb === 'TALLER' ? 'active-TALLER' : ''}" onclick="cambiarAmbitoInformeAlumno('TALLER')">🔧 Solo Taller</button>
+          <button type="button" class="scope-pill ${amb === 'TEORIA' ? 'active-TEORIA' : ''}" onclick="cambiarAmbitoInformeAlumno('TEORIA')">📘 Solo Teoría</button>
+        </div>
+        <div class="form-grid">
+          <div class="form-group"><label>WhatsApp Familiar</label><input type="tel" id="infTelefonoPadre" placeholder="Ej: 1123456789" value="${configInformeAlumno.telefonoPadre || est.telefonoFamilia || ""}" oninput="actualizarConfigInformeDesdeInputs()"></div>
+          <div class="form-group">
+            <label>📲 App de WhatsApp</label>
+            <select id="infTipoAppWA" onchange="cambiarPreferenciaAppWA(this.value)">
+              <option value="W4B" ${preferenciaAppWA === "W4B" ? "selected" : ""}>WhatsApp Business</option>
+              <option value="PERSONAL" ${preferenciaAppWA === "PERSONAL" ? "selected" : ""}>WhatsApp Personal (Común)</option>
+            </select>
+          </div>
+          <div class="form-group"><label>Fechas Teoría Extra</label><input type="text" id="infFechasExtraTeo" value="${configInformeAlumno.fechasExtraTeo || ""}" oninput="actualizarConfigInformeDesdeInputs()"></div>
+          <div class="form-group"><label>Fechas Taller Extra</label><input type="text" id="infFechasExtraTal" value="${configInformeAlumno.fechasExtraTal || ""}" oninput="actualizarConfigInformeDesdeInputs()"></div>
+          <div class="form-group"><label>Nota Opcional</label><input type="text" id="infNotaAdicional" value="${configInformeAlumno.notaAdicional || ""}" oninput="actualizarConfigInformeDesdeInputs()"></div>
+        </div>
+        <div class="action-buttons" style="margin-top:10px;">
+          <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:8px;">
+            <button type="button" id="btnEnviarWAAlumno" class="btn-main btn-w4b" onclick="enviarInformeAlumnoWhatsApp()">📲 Enviar por ${nombreApp}</button>
+            <button type="button" class="btn-main btn-print-blue" onclick="imprimirComunicadoAlumnoActual()">🖨️ Imprimir Talón Cuaderno</button>
+          </div>
+          <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <button type="button" class="btn-outline" style="flex:1;" onclick="copiarInformeAlumnoPortapapeles()">📋 Copiar Texto</button>
+            <button type="button" class="btn-outline" style="flex:1;" onclick="imprimirComunicadosCursoCompleto()">🖨️ Imprimir Lote Todo el Curso</button>
+          </div>
+        </div>
+        <div class="wa-preview-box" id="waAlumnoPreviewBox">${construirMensajeWhatsAppAlumno(est)}</div>
+      </div>
+    `;
+  }
+
+  html += `
+    <div class="panel" style="margin-bottom:14px;">
+      <div class="panel-title">
+        <span>📬 Bandeja de Comunicados y Citaciones (${notifsEst.length})</span>
+      </div>
+  `;
+  if (notifsEst.length === 0) {
+    html += `<p style="font-size:12px; color:#64748b;">No hay notificaciones registradas para este estudiante.</p>`;
+  } else {
+    notifsEst.forEach(n => {
+      const leido = n.estadoLectura === "NOTIFICADO";
+      html += `
+        <div class="notif-item-card ${leido ? '' : 'unread'}">
+          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px;">
+            <div>
+              <span class="badge ${leido ? 'badge-ok' : 'badge-warn'}">${leido ? '✅ NOTIFICADO: ' + n.fechaLectura : '⏳ PENDIENTE DE LECTURA'}</span>
+              <strong style="font-size:13px; margin-left:6px;">${n.asunto}</strong>
+            </div>
+            <small style="color:#64748b; font-weight:700;">${n.fechaHora} | Email: ${n.emailEnviado}</small>
+          </div>
+          <p style="font-size:12px; color:#1e293b; white-space:pre-wrap; margin:6px 0;">${n.mensaje}</p>
+          ${n.fechaCitacion ? `<div style="font-size:11.5px; font-weight:800; color:#b45309;">📅 Citación: ${n.fechaCitacion} ${n.horaCitacion || ''}</div>` : ''}
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-top:6px; flex-wrap:wrap; gap:6px;">
+            <small style="color:#64748b;">Emitido por: ${n.emitidoPor}</small>
+            <div style="display:flex; gap:6px;">
+              ${!leido ? `<button type="button" class="btn-success-outline" onclick="confirmarLecturaNotificacionUI('${n.id}')">✅ Confirmar Recepción</button>` : ''}
+              ${!esFam && n.fechaCitacion ? `<button type="button" class="btn-outline" style="padding:4px 8px; font-size:11px;" onclick="prepararActaDesdeAlumno(${est.filaHoja}, 'INCOMPARECENCIA', '${n.fechaCitacion}', '${n.horaCitacion || ''}')">📄 Acta Incomparecencia</button>` : ''}
+              ${!esFam ? `<button type="button" class="btn-danger-outline" style="padding:4px 8px; font-size:11px;" onclick="eliminarNotificacionUI('${n.id}')">🗑️</button>` : ''}
+            </div>
+          </div>
+        </div>
+      `;
+    });
+  }
+  html += `</div>`;
 
   const materiasOrdenadas = obtenerMateriasOrdenadasVisualmente();
   let mostroBannerTeoria = false;
@@ -1602,11 +2297,11 @@ function renderVistaAlumno() {
     if (amb === "TEORIA" && esTal) return;
 
     if (!esTal && !mostroBannerTeoria) {
-      html += `<div class="section-divider-banner divider-teoria">📘 Materias de Teoría</div>`;
+      html += `<div class="section-divider-banner divider-teoria">📘 Calificaciones — Materias de Teoría</div>`;
       mostroBannerTeoria = true;
     }
     if (esTal && !mostroBannerTaller) {
-      html += `<div class="section-divider-banner divider-taller">🔧 Materias de Taller</div>`;
+      html += `<div class="section-divider-banner divider-taller">🔧 Calificaciones — Materias de Taller</div>`;
       mostroBannerTaller = true;
     }
 
@@ -1616,7 +2311,7 @@ function renderVistaAlumno() {
     html += `<div class="grade-card ${esResumenTaller ? 'resumen-taller-card' : ''}">
       <div style="display:flex; justify-content:space-between; align-items:center; gap:6px; flex-wrap:wrap;">
         <strong style="font-size:13px; color:#1e3a8a;">${mat.nombre} ${esResumenTaller ? ' 🔧 (Promedio)' : ''}</strong>
-        <span class="tag-tipo-mat ${esTal ? 'tag-tipo-taller' : 'tag-tipo-teoria'}" title="Tocá para cambiar entre Teoría y Taller" onclick="alternarTipoMateriaTallerTeoria(${mat.indice})">${esTal ? '🔧 Taller' : '📘 Teoría'}</span>
+        <span class="tag-tipo-mat ${esTal ? 'tag-tipo-taller' : 'tag-tipo-teoria'}" ${!esFam ? `title="Tocá para cambiar entre Teoría y Taller" onclick="alternarTipoMateriaTallerTeoria(${mat.indice})"` : ''}>${esTal ? '🔧 Taller' : '📘 Teoría'}</span>
       </div>
       <div class="grade-inputs-grid">`;
     SUB_CAMPOS.forEach(sc => {
@@ -1630,6 +2325,588 @@ function renderVistaAlumno() {
   cont.innerHTML = html;
 }
 
+/* ==================== MÓDULO DE ACTAS INSTITUCIONALES (DEC. 2299/11 Y RES. 1650/24) ==================== */
+let estadoGeneradorActa = {
+  filaHojaAlumno: 0,         // Número de fila del alumno o "BLANCO" para plantilla vacía a mano
+  tipoActa: "INASISTENCIAS", // INASISTENCIAS | INCOMPARECENCIA
+  escalonForzado: "AUTO",    // AUTO | 10 | 20 | 28
+  fechaActa: "",
+  horaActa: "14:00",
+  fechaCitacionPrevia: "",
+  horaCitacionPrevia: "",
+  adultoResponsable: "",
+  dniAdulto: "",
+  autoridades: "",
+  cuerpoEditable: ""
+};
+
+function esModoActaEnBlanco() {
+  return String(estadoGeneradorActa.filaHojaAlumno) === "BLANCO";
+}
+
+function inicializarValoresGeneradorActa() {
+  const hoy = new Date();
+  const dd = String(hoy.getDate()).padStart(2, "0");
+  const mm = String(hoy.getMonth() + 1).padStart(2, "0");
+  const yyyy = hoy.getFullYear();
+  if (!estadoGeneradorActa.fechaActa) {
+    estadoGeneradorActa.fechaActa = `${dd}/${mm}/${yyyy}`;
+  }
+  if (!estadoGeneradorActa.autoridades) {
+    const prec = document.getElementById("asistPreceptor")?.value.trim() || "Preceptoría";
+    estadoGeneradorActa.autoridades = `Equipo de Conducción, E.O.E. y Preceptor/a ${prec}`;
+  }
+}
+
+function activarActaEnBlancoParaImprimir() {
+  inicializarValoresGeneradorActa();
+  estadoGeneradorActa.filaHojaAlumno = "BLANCO";
+  regenerarTextoBaseActa();
+  renderVistaActas();
+  mostrarToast("📝 Modo Acta en Blanco activado (listo para imprimir y completar a mano)");
+}
+
+function prepararActaDesdeAlumno(filaHoja, tipoActa = "INASISTENCIAS", fechaCit = "", horaCit = "") {
+  inicializarValoresGeneradorActa();
+  estadoGeneradorActa.filaHojaAlumno = Number(filaHoja);
+  estadoGeneradorActa.tipoActa = tipoActa;
+  estadoGeneradorActa.escalonForzado = "AUTO";
+
+  const est = (estado.estudiantes || []).find(e => e.filaHoja === Number(filaHoja));
+  if (est) {
+    estadoGeneradorActa.adultoResponsable = est.adultoResponsable || "";
+    if (fechaCit) {
+      estadoGeneradorActa.fechaCitacionPrevia = fechaCit;
+      estadoGeneradorActa.horaCitacionPrevia = horaCit || "14:00";
+    } else {
+      const claveEst = normalizarClaveNombreAlumno(est.nombre);
+      const ultCit = (estado.notificacionesCurso || []).find(
+        n => normalizarClaveNombreAlumno(n.nombreAlumno) === claveEst && n.fechaCitacion
+      );
+      if (ultCit) {
+        estadoGeneradorActa.fechaCitacionPrevia = ultCit.fechaCitacion;
+        estadoGeneradorActa.horaCitacionPrevia = ultCit.horaCitacion || "14:00";
+      } else {
+        estadoGeneradorActa.fechaCitacionPrevia = estadoGeneradorActa.fechaActa;
+        estadoGeneradorActa.horaCitacionPrevia = "13:30";
+      }
+    }
+  }
+
+  regenerarTextoBaseActa();
+  mostrarVista("actas");
+}
+
+function determinarEscalonInasistencias(totFaltas) {
+  if (estadoGeneradorActa.escalonForzado !== "AUTO") {
+    return Number(estadoGeneradorActa.escalonForzado);
+  }
+  if (esModoActaEnBlanco()) return 10;
+  if (totFaltas >= 28) return 28;
+  if (totFaltas >= 20) return 20;
+  return 10;
+}
+
+function regenerarTextoBaseActa() {
+  inicializarValoresGeneradorActa();
+
+  // 1. MODO PLANTILLA EN BLANCO (PARA COMPLETAR A MANO EN CUALQUIER CURSO O ESTUDIANTE)
+  if (esModoActaEnBlanco()) {
+    const escalonBlanco = determinarEscalonInasistencias(0);
+
+    if (estadoGeneradorActa.tipoActa === "INCOMPARECENCIA") {
+      estadoGeneradorActa.cuerpoEditable =
+        `En la ciudad de San Fernando, a los ______ días del mes de ________________ de 202___, siendo las ____:____ hs., reunidos en la sede de la E.E.S.T. N° 2, las autoridades intervinientes: ________________________________________________________________________, se procede a labrar la presente ACTA DE INCOMPARECENCIA en el marco del Decreto N° 2299/11 y la Resolución N° 1650/24.\n\n` +
+        `MOTIVO: Dejar constancia formal de la incomparecencia del adulto responsable a la citación cursada por el registro de inasistencias acumuladas del/de la estudiante.\n\n` +
+        `DESARROLLO: En el día de la fecha, se deja constancia de que el/la Sr./Sra. ________________________________________, adulto responsable del/de la estudiante ________________________________________ (DNI N° ____________________) de ______ Año ______ División (Grupo ________), no se ha presentado en el establecimiento. Se verifica que la familia había sido debidamente notificada de esta reunión a través del Cuaderno de Comunicados enviado con fecha ____/____/202___, registrando a la fecha un total de ________ inasistencias institucionales.\n\n` +
+        `CONCLUSIONES Y ACUERDOS INSTITUCIONALES:\n` +
+        `1. Se labra la presente acta para respaldar el accionar institucional y se archiva en el Legajo del estudiante.\n` +
+        `2. Se procede a realizar una nueva citación formal a la familia mediante el Cuaderno de Comunicados para garantizar la firma del compromiso de asistencia a clases, dando intervención al Equipo de Orientación Escolar (E.O.E.).\n\n` +
+        `Sin más temas que tratar, se da por finalizada el acta a las ____:____ hs. Se labran dos (2) ejemplares de un mismo tenor, firmas y aclaración de las mismas.`;
+      return;
+    }
+
+    if (escalonBlanco === 10 || escalonBlanco === 20) {
+      const txtUmbral = estadoGeneradorActa.escalonForzado === "AUTO"
+        ? "______ (10 / 20)"
+        : String(escalonBlanco);
+      estadoGeneradorActa.cuerpoEditable =
+        `En la ciudad de San Fernando, a los ______ días del mes de ________________ de 202___, siendo las ____:____ hs., reunidos en la sede de la E.E.S.T. N° 2, las autoridades intervinientes: ________________________________________________________________________, y el/la Sr./Sra. ________________________________________ (DNI N° ____________________), adulto responsable del/de la estudiante ________________________________________ de ______ Año ______ División (Grupo ________), se procede a labrar la presente Acta en el marco del Decreto N° 2299/11 y la Resolución N° 1650/24.\n\n` +
+        `MOTIVO: Notificación por haber alcanzado las ${txtUmbral} inasistencias acumuladas y firma del compromiso de asistencia a clases.\n\n` +
+        `DESARROLLO: En el día de la fecha se hace presente el adulto responsable en respuesta a la citación enviada a través del Cuaderno de Comunicados. Se informa a la familia que el/la estudiante registra a la fecha un total de ________ inasistencias institucionales. Cedida la palabra al familiar, manifiesta que:\n` +
+        `________________________________________________________________________________________________________________________\n` +
+        `________________________________________________________________________________________________________________________\n` +
+        `________________________________________________________________________________________________________________________\n` +
+        `Se deja constancia de que toda documentación entregada por la familia se incorpora al Legajo del estudiante.\n\n` +
+        `CONCLUSIONES Y ACUERDOS INSTITUCIONALES:\n` +
+        `1. El adulto responsable se notifica de las inasistencias registradas y se compromete a garantizar la asistencia regular y puntual del/de la estudiante a clases, recordando que el límite anual es de 28 inasistencias.\n` +
+        `2. La familia se compromete a mantener comunicación mediante el Cuaderno de Comunicados y presentar en Preceptoría las constancias correspondientes en caso de inasistencia.\n` +
+        `3. Observaciones: ______________________________________________________________________________________________________\n\n` +
+        `Sin más temas que tratar, se da por finalizada el acta a las ____:____ hs. Se labran dos (2) ejemplares de un mismo tenor, firmas y aclaración de las mismas.`;
+      return;
+    }
+
+    // Plantilla en blanco para 28 inasistencias (75% por materia)
+    estadoGeneradorActa.cuerpoEditable =
+      `En la ciudad de San Fernando, a los ______ días del mes de ________________ de 202___, siendo las ____:____ hs., reunidos en la sede de la E.E.S.T. N° 2, las autoridades intervinientes: ________________________________________________________________________, y el/la Sr./Sra. ________________________________________ (DNI N° ____________________), adulto responsable del/de la estudiante ________________________________________ de ______ Año ______ División (Grupo ________), se procede a labrar la presente Acta en el marco del Decreto N° 2299/11 y la Resolución N° 1650/24.\n\n` +
+      `MOTIVO: Notificación por haber alcanzado el límite de 28 inasistencias institucionales (Total registrado: ________) y aplicación del 75% de asistencia por materia.\n\n` +
+      `DESARROLLO: En el día de la fecha se hace presente el adulto responsable en respuesta a la citación enviada a través del Cuaderno de Comunicados. Se informa a la familia que el/la estudiante continúa como alumno/a regular, pero al haber alcanzado las 28 inasistencias pasa a contabilizarse el 75% de asistencia sobre las clases efectivamente dictadas en cada materia. En aquellas materias donde no alcance el 75% de asistencia, deberá concurrir a las instancias de intensificación correspondientes. Cedida la palabra al familiar, manifiesta que:\n` +
+      `________________________________________________________________________________________________________________________\n` +
+      `________________________________________________________________________________________________________________________\n\n` +
+      `MATERIAS OBSERVADAS / ESTADO DE ASISTENCIA POR MATERIA:\n` +
+      `________________________________________________________________________________________________________________________\n` +
+      `________________________________________________________________________________________________________________________\n\n` +
+      `CONCLUSIONES Y ACUERDOS INSTITUCIONALES:\n` +
+      `1. Se acuerda un Plan de Continuidad Pedagógica Personalizado con seguimiento de Preceptoría y del Equipo de Orientación Escolar (E.O.E.).\n` +
+      `2. La familia se notifica mediante la presente acta y el Cuaderno de Comunicados, comprometiéndose a sostener la asistencia del/de la estudiante durante el resto del ciclo lectivo.\n\n` +
+      `Sin más temas que tratar, se da por finalizada el acta a las ____:____ hs. Se labran dos (2) ejemplares de un mismo tenor, firmas y aclaración de las mismas.`;
+    return;
+  }
+
+  // 2. MODO AUTOMÁTICO CON DATOS DEL ESTUDIANTE SELECCIONADO
+  const listaEst = estado.estudiantes || [];
+  let est = listaEst.find(e => e.filaHoja === Number(estadoGeneradorActa.filaHojaAlumno));
+  if (!est && listaEst.length > 0) {
+    est = listaEst[0];
+    estadoGeneradorActa.filaHojaAlumno = est.filaHoja;
+  }
+  if (!est) return;
+
+  const cursoLimpio = (estado.cursoActual || "").replace(/_/g, " ");
+  const totFaltas = (est.inasistencias && est.inasistencias.total) || 0;
+  const adulto = estadoGeneradorActa.adultoResponsable || est.adultoResponsable || "___________________________";
+  const dniAlu = est.dni || "___________";
+  const resumenMeses = obtenerResumenMensualAbreviado(est) || "Sin detalle mensual";
+
+  if (estadoGeneradorActa.tipoActa === "INCOMPARECENCIA") {
+    const fCit = estadoGeneradorActa.fechaCitacionPrevia || estadoGeneradorActa.fechaActa;
+    const hCit = estadoGeneradorActa.horaCitacionPrevia || "14:00";
+    estadoGeneradorActa.cuerpoEditable =
+      `En la ciudad de San Fernando, a los ${estadoGeneradorActa.fechaActa}, siendo las ${estadoGeneradorActa.horaActa} hs., reunidos en la sede de la E.E.S.T. N° 2, las autoridades intervinientes (${estadoGeneradorActa.autoridades}), se procede a labrar la presente ACTA DE INCOMPARECENCIA en el marco del Decreto N° 2299/11 y la Resolución N° 1650/24.\n\n` +
+      `MOTIVO: Dejar constancia formal de la incomparecencia del adulto responsable a la citación cursada por el registro de inasistencias acumuladas del/de la estudiante.\n\n` +
+      `DESARROLLO: En el día de la fecha, se deja constancia de que el/la Sr./Sra. ${adulto}, adulto responsable del/de la estudiante ${est.nombre} (DNI N° ${dniAlu}) de ${cursoLimpio} (${est.grupo}), no se ha presentado en el establecimiento a la reunión citada para el día ${fCit} a las ${hCit} hs. Se verifica que la familia había sido debidamente notificada de esta reunión a través del Cuaderno de Comunicados, registrando a la fecha un total de ${totFaltas} inasistencias institucionales.\n\n` +
+      `CONCLUSIONES Y ACUERDOS INSTITUCIONALES:\n` +
+      `1. Se labra la presente acta para respaldar el accionar institucional y se archiva en el Legajo del estudiante.\n` +
+      `2. Se procede a realizar una nueva citación formal a la familia mediante el Cuaderno de Comunicados para garantizar la firma del compromiso de asistencia a clases, dando intervención al Equipo de Orientación Escolar (E.O.E.).\n\n` +
+      `Sin más temas que tratar, se da por finalizada el acta en el lugar y fecha indicados. Se labran dos (2) ejemplares de un mismo tenor, firmas y aclaración de las mismas.`;
+    return;
+  }
+
+  // ACTA DE NOTIFICACIÓN DE INASISTENCIAS ACUMULADAS (10, 20 y 28)
+  const escalon = determinarEscalonInasistencias(totFaltas);
+  if (escalon === 10 || escalon === 20) {
+    estadoGeneradorActa.cuerpoEditable =
+      `En la ciudad de San Fernando, a los ${estadoGeneradorActa.fechaActa}, siendo las ${estadoGeneradorActa.horaActa} hs., reunidos en la sede de la E.E.S.T. N° 2, las autoridades intervinientes (${estadoGeneradorActa.autoridades}) y el/la Sr./Sra. ${adulto}, adulto responsable del/de la estudiante ${est.nombre} (DNI N° ${dniAlu}) de ${cursoLimpio} (${est.grupo}), se procede a labrar la presente Acta en el marco del Decreto N° 2299/11 y la Resolución N° 1650/24.\n\n` +
+      `MOTIVO: Notificación por haber alcanzado las ${escalon} inasistencias acumuladas y firma del compromiso de asistencia a clases.\n\n` +
+      `DESARROLLO: En el día de la fecha se hace presente el adulto responsable en respuesta a la citación enviada a través del Cuaderno de Comunicados. Se informa a la familia que el/la estudiante registra a la fecha un total de ${totFaltas} inasistencias institucionales acumuladas (Detalle por mes: ${resumenMeses}). Se conversa sobre los motivos de las ausencias y se recuerda la importancia de sostener la asistencia regular tanto en Teoría como en Taller, teniendo en cuenta que el límite anual es de 28 inasistencias. Toda constancia o documentación entregada por la familia se incorpora al Legajo del estudiante.\n\n` +
+      `CONCLUSIONES Y ACUERDOS INSTITUCIONALES:\n` +
+      `1. El adulto responsable se notifica de las inasistencias registradas y se compromete a garantizar la asistencia regular y puntual del/de la estudiante a clases.\n` +
+      `2. La familia se compromete a mantener comunicación mediante el Cuaderno de Comunicados y presentar en Preceptoría las constancias correspondientes en caso de inasistencia.\n` +
+      `3. Se realizará el seguimiento de asistencia desde Preceptoría y el Equipo de Orientación Escolar (E.O.E.).\n\n` +
+      `Sin más temas que tratar, se da por finalizada el acta en el lugar y fecha indicados. Se labran dos (2) ejemplares de un mismo tenor, firmas y aclaración de las mismas.`;
+  } else {
+    // Escalón 28 inasistencias: Rige el 75% de asistencia por materia sobre clases efectivamente dictadas
+    const resumen75 = calcularAsistenciaPorMateriaEstudiante(est);
+    const lineasMat = resumen75.map(r =>
+      `• ${r.nombre}: ${r.asistidasEfectivas}/${r.clasesDictadas} clases asistidas (${r.porcentaje}%) — ${r.enRegla75 ? 'Cumple >=75%' : 'Debe intensificar (<75%)'}`
+    ).join("\n");
+
+    estadoGeneradorActa.cuerpoEditable =
+      `En la ciudad de San Fernando, a los ${estadoGeneradorActa.fechaActa}, siendo las ${estadoGeneradorActa.horaActa} hs., reunidos en la sede de la E.E.S.T. N° 2, las autoridades intervinientes (${estadoGeneradorActa.autoridades}) y el/la Sr./Sra. ${adulto}, adulto responsable del/de la estudiante ${est.nombre} (DNI N° ${dniAlu}) de ${cursoLimpio} (${est.grupo}), se procede a labrar la presente Acta en el marco del Decreto N° 2299/11 y la Resolución N° 1650/24.\n\n` +
+      `MOTIVO: Notificación por haber alcanzado el límite de 28 inasistencias institucionales (Total registrado: ${totFaltas}) y aplicación del 75% de asistencia por materia.\n\n` +
+      `DESARROLLO: En el día de la fecha se hace presente el adulto responsable en respuesta a la citación enviada a través del Cuaderno de Comunicados. Se informa a la familia que, al haber alcanzado el límite de 28 inasistencias anuales, el/la estudiante continúa como alumno/a regular debiendo asistir normalmente a clases, pero a partir de esta instancia pasa a contabilizarse el 75% de asistencia sobre las clases efectivamente dictadas en cada materia. En aquellas materias donde no alcance el 75% de asistencia, deberá concurrir a las instancias de intensificación correspondientes.\n\n` +
+      `REGISTRO ACTUAL DE ASISTENCIA POR MATERIA:\n${lineasMat || 'Sin partes registrados.'}\n\n` +
+      `CONCLUSIONES Y ACUERDOS INSTITUCIONALES:\n` +
+      `1. Se acuerda un Plan de Continuidad Pedagógica Personalizado con seguimiento de Preceptoría y del Equipo de Orientación Escolar (E.O.E.).\n` +
+      `2. La familia se notifica mediante la presente acta y a través del Cuaderno de Comunicados de las materias que requieren recuperar asistencia, comprometiéndose a sostener la concurrencia del/de la estudiante durante el resto del ciclo lectivo.\n\n` +
+      `Sin más temas que tratar, se da por finalizada el acta en el lugar y fecha indicados. Se labran dos (2) ejemplares de un mismo tenor, firmas y aclaración de las mismas.`;
+  }
+}
+
+function alCambiarSelectorAlumnoActa(nuevoValor) {
+  if (nuevoValor === "BLANCO") {
+    estadoGeneradorActa.filaHojaAlumno = "BLANCO";
+    estadoGeneradorActa.adultoResponsable = "";
+  } else {
+    estadoGeneradorActa.filaHojaAlumno = Number(nuevoValor);
+    const est = (estado.estudiantes || []).find(e => e.filaHoja === Number(nuevoValor));
+    if (est) {
+      estadoGeneradorActa.adultoResponsable = est.adultoResponsable || "";
+    }
+  }
+  regenerarTextoBaseActa();
+  renderVistaActas();
+}
+
+function alCambiarTipoOEscalonActa() {
+  estadoGeneradorActa.tipoActa = document.getElementById("actaSelectTipo")?.value || "INASISTENCIAS";
+  estadoGeneradorActa.escalonForzado = document.getElementById("actaSelectEscalon")?.value || "AUTO";
+  regenerarTextoBaseActa();
+  renderVistaActas();
+}
+
+function sincronizarCamposActaDesdeDOM() {
+  estadoGeneradorActa.fechaActa = document.getElementById("actaInputFecha")?.value.trim() || estadoGeneradorActa.fechaActa;
+  estadoGeneradorActa.horaActa = document.getElementById("actaInputHora")?.value.trim() || estadoGeneradorActa.horaActa;
+  estadoGeneradorActa.adultoResponsable = document.getElementById("actaInputAdulto")?.value.trim() || "";
+  estadoGeneradorActa.autoridades = document.getElementById("actaInputAutoridades")?.value.trim() || "";
+  estadoGeneradorActa.cuerpoEditable = document.getElementById("actaTextareaCuerpo")?.value || "";
+
+  const preview = document.getElementById("actaPreviewSheetContainer");
+  if (preview) preview.innerHTML = construirDocumentoActaOficialHTML();
+}
+
+function construirDocumentoActaOficialHTML() {
+  const enBlanco = esModoActaEnBlanco();
+  const est = !enBlanco
+    ? ((estado.estudiantes || []).find(e => e.filaHoja === Number(estadoGeneradorActa.filaHojaAlumno)) || (estado.estudiantes || [])[0])
+    : null;
+
+  const cursoLimpio = enBlanco ? "____________________" : (estado.cursoActual || "").replace(/_/g, " ");
+  const totFaltas = (!enBlanco && est && est.inasistencias) ? est.inasistencias.total : "________";
+  const escalon = determinarEscalonInasistencias(Number(totFaltas) || 0);
+
+  let tituloActa = "";
+  if (estadoGeneradorActa.tipoActa === "INCOMPARECENCIA") {
+    tituloActa = "ACTA DE INCOMPARECENCIA DE ADULTO RESPONSABLE";
+  } else if (enBlanco && estadoGeneradorActa.escalonForzado === "AUTO") {
+    tituloActa = "ACTA DE NOTIFICACIÓN DE INASISTENCIAS ACUMULADAS";
+  } else {
+    tituloActa = `ACTA DE NOTIFICACIÓN DE INASISTENCIAS ACUMULADAS (${escalon === 28 ? '28 INASISTENCIAS — RIGE 75% POR MATERIA' : escalon + ' INASISTENCIAS'})`;
+  }
+
+  const fechaMostrar = enBlanco ? "____/____/202___" : estadoGeneradorActa.fechaActa;
+  const horaMostrar = enBlanco ? "____:____" : estadoGeneradorActa.horaActa;
+
+  const tiraEstudianteHTML = enBlanco
+    ? `
+      <div style="border:1px solid #000; padding:8px 10px; margin-bottom:14px; font-size:12px; background:#f8fafc; line-height:1.8;">
+        <strong>ESTUDIANTE:</strong> ________________________________________________ &nbsp;|&nbsp;
+        <strong>DNI N°:</strong> ________________________<br>
+        <strong>CURSO / GRUPO:</strong> ________________________ &nbsp;|&nbsp;
+        <strong>INASISTENCIAS ACUMULADAS:</strong> ____________ &nbsp;|&nbsp;
+        <strong>ACTA N°:</strong> ________
+      </div>
+    `
+    : `
+      <div style="border:1px solid #000; padding:6px 10px; margin-bottom:12px; font-size:12px; background:#f8fafc;">
+        <strong>ESTUDIANTE:</strong> ${est ? (est.orden + '. ' + est.nombre) : ''} &nbsp;|&nbsp;
+        <strong>DNI:</strong> ${(est && est.dni) ? est.dni : "___________"} &nbsp;|&nbsp;
+        <strong>CURSO / GRUPO:</strong> ${cursoLimpio} (${(est && est.grupo) ? est.grupo : "-"}) &nbsp;|&nbsp;
+        <strong>INASISTENCIAS ACUMULADAS:</strong> ${totFaltas}
+      </div>
+    `;
+
+  // BLOQUE DE FIRMAS SEGÚN TIPO DE ACTA (SIN FIRMA DEL ESTUDIANTE EN NINGÚN CASO)
+  let firmasHTML = "";
+  if (estadoGeneradorActa.tipoActa === "INCOMPARECENCIA") {
+    // En Incomparecencia el adulto responsable no asistió: solo firman las autoridades de la institución
+    firmasHTML = `
+      <div class="acta-sign-grid" style="grid-template-columns: repeat(2, 1fr);">
+        <div>
+          <div class="acta-sign-line">
+            Firma y Aclaración — Preceptor/a Interviniente<br>
+            <small>E.E.S.T. N° 2 San Fernando</small>
+          </div>
+        </div>
+        <div>
+          <div class="acta-sign-line">
+            Firma y Aclaración — Equipo Directivo / Jefe de Preceptores / E.O.E.<br>
+            <small>E.E.S.T. N° 2 San Fernando</small>
+          </div>
+        </div>
+      </div>
+    `;
+  } else {
+    // En Notificación de Inasistencias firman el Adulto Responsable y las Autoridades (sin firma del alumno)
+    const aclaracionAdulto = enBlanco
+      ? "Aclaración y DNI N°: ___________________________"
+      : (estadoGeneradorActa.adultoResponsable ? `${estadoGeneradorActa.adultoResponsable} — DNI: _______________` : "Aclaración y DNI N°: ___________________________");
+
+    firmasHTML = `
+      <div class="acta-sign-grid" style="grid-template-columns: repeat(3, 1fr);">
+        <div>
+          <div class="acta-sign-line">
+            Firma del Adulto Responsable<br>
+            <small>${aclaracionAdulto}</small>
+          </div>
+        </div>
+        <div>
+          <div class="acta-sign-line">
+            Firma y Aclaración — Preceptor/a<br>
+            <small>E.E.S.T. N° 2 San Fernando</small>
+          </div>
+        </div>
+        <div>
+          <div class="acta-sign-line">
+            Firma y Aclaración — Equipo Directivo / E.O.E.<br>
+            <small>E.E.S.T. N° 2 San Fernando</small>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="acta-preview-sheet">
+      <div class="acta-header-oficial">
+        <div>
+          <div style="font-size:14px; font-weight:bold; text-transform:uppercase;">Dirección General de Cultura y Educación — Provincia de Buenos Aires</div>
+          <div style="font-size:15px; font-weight:900;">E.E.S.T. N° 2 "Pbro. Dr. Manuel de San Ginés" — Distrito San Fernando</div>
+          <div style="font-size:11.5px;">Estados Administrativos Escolares — Registro de Actas Institucionales</div>
+        </div>
+        <div style="text-align:right; font-size:12px; font-weight:bold;">
+          Fecha: ${fechaMostrar}<br>
+          Hora: ${horaMostrar} hs.<br>
+          Curso: ${cursoLimpio}
+        </div>
+      </div>
+
+      <h3 style="text-align:center; font-size:14px; text-decoration:underline; margin:10px 0 14px 0; text-transform:uppercase;">
+        ${tituloActa}
+      </h3>
+
+      ${tiraEstudianteHTML}
+
+      <div style="white-space:pre-wrap; text-align:justify; font-size:12.5px; line-height:1.6;">${estadoGeneradorActa.cuerpoEditable}</div>
+
+      ${firmasHTML}
+    </div>
+  `;
+}
+
+function renderVistaActas() {
+  const cont = document.getElementById("contenedorGeneradorActas");
+  const contHist = document.getElementById("tablaHistorialActasCurso");
+  if (!cont) return;
+
+  inicializarValoresGeneradorActa();
+  const listaEst = estado.estudiantes || [];
+
+  if (!esModoActaEnBlanco()) {
+    if (listaEst.length === 0) {
+      estadoGeneradorActa.filaHojaAlumno = "BLANCO";
+      regenerarTextoBaseActa();
+    } else if (!estadoGeneradorActa.filaHojaAlumno || !listaEst.some(e => e.filaHoja === Number(estadoGeneradorActa.filaHojaAlumno))) {
+      estadoGeneradorActa.filaHojaAlumno = listaEst[0].filaHoja;
+      estadoGeneradorActa.adultoResponsable = listaEst[0].adultoResponsable || "";
+      regenerarTextoBaseActa();
+    } else if (!estadoGeneradorActa.cuerpoEditable) {
+      regenerarTextoBaseActa();
+    }
+  } else if (!estadoGeneradorActa.cuerpoEditable) {
+    regenerarTextoBaseActa();
+  }
+
+  const enBlanco = esModoActaEnBlanco();
+  const estActual = !enBlanco
+    ? (listaEst.find(e => e.filaHoja === Number(estadoGeneradorActa.filaHojaAlumno)) || listaEst[0])
+    : null;
+  const totFaltas = (estActual && estActual.inasistencias) ? (estActual.inasistencias.total || 0) : 0;
+
+  let optsAlumnos = `<option value="BLANCO" ${enBlanco ? 'selected' : ''}>📝 ACTA EN BLANCO (Para completar a mano — Cualquier curso/alumno)</option>`;
+  listaEst.forEach(e => {
+    const f = (e.inasistencias && e.inasistencias.total) || 0;
+    const sel = (!enBlanco && estActual && e.filaHoja === estActual.filaHoja) ? "selected" : "";
+    optsAlumnos += `<option value="${e.filaHoja}" ${sel}>${e.orden}. ${e.nombre} (Acum: ${f} faltas)</option>`;
+  });
+
+  cont.innerHTML = `
+    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:10px; background:#eff6ff; border:1px solid #bfdbfe; padding:10px 12px; border-radius:8px;">
+      <div style="font-size:12.5px; color:#1e3a8a; font-weight:700;">
+        💡 Podés generar el acta con los datos de un estudiante o elegir <b>"📝 Acta en Blanco"</b> para imprimir copias vacías y completarlas a mano.
+      </div>
+      <button type="button" class="btn-outline" style="border-color:#1e3a8a; color:#1e3a8a;" onclick="activarActaEnBlancoParaImprimir()">
+        📝 Poner Acta en Blanco (Para llenar a mano)
+      </button>
+    </div>
+
+    <div class="form-grid" style="background:#f8fafc; padding:12px; border:1px solid #cbd5e1; border-radius:8px; margin-bottom:12px;">
+      <div class="form-group">
+        <label>Estudiante o Formato en Blanco</label>
+        <select id="actaSelectAlumno" onchange="alCambiarSelectorAlumnoActa(this.value)">${optsAlumnos}</select>
+      </div>
+      <div class="form-group">
+        <label>Tipo de Acta Institucional</label>
+        <select id="actaSelectTipo" onchange="alCambiarTipoOEscalonActa()">
+          <option value="INASISTENCIAS" ${estadoGeneradorActa.tipoActa === "INASISTENCIAS" ? "selected" : ""}>📊 Acta de Notificación de Inasistencias Acumuladas</option>
+          <option value="INCOMPARECENCIA" ${estadoGeneradorActa.tipoActa === "INCOMPARECENCIA" ? "selected" : ""}>🚫 Acta de Incomparecencia (Familiar citado no asiste)</option>
+        </select>
+      </div>
+      <div class="form-group" style="${estadoGeneradorActa.tipoActa === 'INCOMPARECENCIA' ? 'display:none;' : ''}">
+        <label>Escalón Normativo (Res. 1650/24)</label>
+        <select id="actaSelectEscalon" onchange="alCambiarTipoOEscalonActa()">
+          <option value="AUTO" ${estadoGeneradorActa.escalonForzado === "AUTO" ? "selected" : ""}>${enBlanco ? 'Genérico 10 / 20 Inasistencias (A completar)' : `Automático según faltas (${totFaltas} -> Escalón ${determinarEscalonInasistencias(totFaltas)})`}</option>
+          <option value="10" ${estadoGeneradorActa.escalonForzado === "10" ? "selected" : ""}>1° Citación: 10 Inasistencias</option>
+          <option value="20" ${estadoGeneradorActa.escalonForzado === "20" ? "selected" : ""}>2° Citación: 20 Inasistencias</option>
+          <option value="28" ${estadoGeneradorActa.escalonForzado === "28" ? "selected" : ""}>3° Citación: 28 Inasistencias (75% por materia)</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Fecha del Acta</label>
+        <input type="text" id="actaInputFecha" value="${estadoGeneradorActa.fechaActa}" ${enBlanco ? 'disabled title="En modo en blanco se imprime con línea para escribir a mano"' : ''} oninput="sincronizarCamposActaDesdeDOM()">
+      </div>
+      <div class="form-group">
+        <label>Hora</label>
+        <input type="text" id="actaInputHora" value="${estadoGeneradorActa.horaActa}" ${enBlanco ? 'disabled title="En modo en blanco se imprime con línea para escribir a mano"' : ''} oninput="sincronizarCamposActaDesdeDOM()">
+      </div>
+      <div class="form-group">
+        <label>Adulto Responsable (Citado / Presente)</label>
+        <input type="text" id="actaInputAdulto" value="${estadoGeneradorActa.adultoResponsable || ''}" placeholder="Apellido y Nombre del Familiar" ${enBlanco ? 'disabled' : ''} oninput="sincronizarCamposActaDesdeDOM()">
+      </div>
+      <div class="form-group" style="grid-column: 1 / -1;">
+        <label>Autoridades Presentes / Intervinientes</label>
+        <input type="text" id="actaInputAutoridades" value="${estadoGeneradorActa.autoridades}" oninput="sincronizarCamposActaDesdeDOM()">
+      </div>
+      <div class="form-group" style="grid-column: 1 / -1;">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <label>Texto del Acta (Podés editar o agregar observaciones antes de imprimir y guardar)</label>
+          <button type="button" class="btn-outline" style="padding:3px 8px; font-size:11px;" onclick="regenerarTextoBaseActa(); renderVistaActas();">🔄 Restaurar redacción automática</button>
+        </div>
+        <textarea id="actaTextareaCuerpo" rows="9" oninput="sincronizarCamposActaDesdeDOM()">${estadoGeneradorActa.cuerpoEditable}</textarea>
+      </div>
+    </div>
+
+    <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
+      <button type="button" class="btn-main btn-print-blue" style="flex:1;" onclick="imprimirActaActualA4()">
+        🖨️ Imprimir Acta Oficial A4 / Guardar PDF
+      </button>
+      ${!enBlanco ? `
+      <button type="button" class="btn-main btn-w4b" style="flex:1;" onclick="guardarActaActualEnSheet()">
+        💾 Registrar Acta en Google Sheets (Libro Digital)
+      </button>` : ''}
+    </div>
+
+    <div id="actaPreviewSheetContainer">${construirDocumentoActaOficialHTML()}</div>
+  `;
+
+  if (contHist) {
+    const listaActas = estado.actasCurso || [];
+    if (listaActas.length === 0) {
+      contHist.innerHTML = `<p style="padding:10px; color:#64748b;">Aún no hay actas registradas en este curso.</p>`;
+    } else {
+      let h = `<table class="app-table"><thead><tr><th>Fecha</th><th>Estudiante</th><th>Tipo de Acta</th><th>Faltas</th><th>Adulto Responsable</th><th>Labrada Por</th><th>Acciones</th></tr></thead><tbody>`;
+      listaActas.forEach((ac, idx) => {
+        h += `
+          <tr>
+            <td><strong>${ac.fecha}</strong> <small>${ac.hora}</small></td>
+            <td class="td-left">${ac.ordenAlumno}. ${ac.nombreAlumno}</td>
+            <td><span class="badge badge-grp">${ac.tipoActa} (${ac.escalon})</span></td>
+            <td><strong>${ac.totalFaltas}</strong></td>
+            <td>${ac.adultoResponsable || "-"}</td>
+            <td>${ac.labradaPor || "-"}</td>
+            <td>
+              <button type="button" class="btn-outline" style="padding:3px 7px; font-size:11px;" onclick="cargarActaGuardadaDesdeHistorial(${idx})">👁️ Ver / Imprimir</button>
+              <button type="button" class="btn-danger-outline" style="padding:3px 7px; font-size:11px;" onclick="eliminarActaGuardadaUI('${ac.id}')">🗑️</button>
+            </td>
+          </tr>
+        `;
+      });
+      h += `</tbody></table>`;
+      contHist.innerHTML = h;
+    }
+  }
+}
+
+function imprimirActaActualA4() {
+  sincronizarCamposActaDesdeDOM();
+  const root = document.getElementById("printActasRoot");
+  if (!root) return;
+  root.innerHTML = construirDocumentoActaOficialHTML();
+  document.body.classList.remove("print-mode-comunicado");
+  document.body.classList.add("print-mode-acta");
+  window.print();
+  setTimeout(() => document.body.classList.remove("print-mode-acta"), 600);
+}
+
+async function guardarActaActualEnSheet() {
+  if (esModoActaEnBlanco()) {
+    mostrarToast("ℹ️ El acta en blanco es para imprimir y llenar a mano.");
+    return;
+  }
+  sincronizarCamposActaDesdeDOM();
+  const est = (estado.estudiantes || []).find(e => e.filaHoja === Number(estadoGeneradorActa.filaHojaAlumno));
+  if (!est) return;
+
+  const totFaltas = (est.inasistencias && est.inasistencias.total) || 0;
+  const escalon = estadoGeneradorActa.tipoActa === "INCOMPARECENCIA"
+    ? "INCOMPARECENCIA"
+    : `UMBRAL_${determinarEscalonInasistencias(totFaltas)}`;
+
+  try {
+    mostrarToast("⏳ Guardando acta en Registro_Actas...");
+    const resp = await fetch(scriptUrl, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({
+        accion: "guardarActa",
+        curso: estado.cursoActual,
+        acta: {
+          fecha: estadoGeneradorActa.fechaActa,
+          hora: estadoGeneradorActa.horaActa,
+          ordenAlumno: est.orden,
+          nombreAlumno: est.nombre,
+          dniAlumno: est.dni || "",
+          tipoActa: estadoGeneradorActa.tipoActa,
+          escalon: escalon,
+          totalFaltas: totFaltas,
+          adultoResponsable: estadoGeneradorActa.adultoResponsable,
+          autoridades: estadoGeneradorActa.autoridades,
+          cuerpoTexto: estadoGeneradorActa.cuerpoEditable
+        }
+      })
+    });
+    const json = await resp.json();
+    if (!json.ok) throw new Error(json.error);
+
+    aplicarDatosRecibidos(json.data, true);
+    mostrarToast("✅ Acta registrada en Google Sheets");
+  } catch (err) {
+    mostrarToast("⚠️ Error: " + err.message, 4000);
+  }
+}
+
+function cargarActaGuardadaDesdeHistorial(idx) {
+  const ac = (estado.actasCurso || [])[idx];
+  if (!ac) return;
+  const est = (estado.estudiantes || []).find(
+    e => normalizarClaveNombreAlumno(e.nombre) === normalizarClaveNombreAlumno(ac.nombreAlumno)
+  );
+  if (est) estadoGeneradorActa.filaHojaAlumno = est.filaHoja;
+  estadoGeneradorActa.tipoActa = ac.tipoActa || "INASISTENCIAS";
+  estadoGeneradorActa.fechaActa = ac.fecha || estadoGeneradorActa.fechaActa;
+  estadoGeneradorActa.horaActa = ac.hora || "14:00";
+  estadoGeneradorActa.adultoResponsable = ac.adultoResponsable || "";
+  estadoGeneradorActa.autoridades = ac.autoridades || "";
+  estadoGeneradorActa.cuerpoEditable = ac.cuerpoTexto || "";
+
+  renderVistaActas();
+  window.scrollTo({ top: 0, behavior: "smooth" });
+  mostrarToast("📄 Acta cargada en el editor");
+}
+
+async function eliminarActaGuardadaUI(idActa) {
+  if (!confirm("¿Eliminar este registro de acta del historial?")) return;
+  try {
+    const resp = await fetch(scriptUrl, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({
+        accion: "eliminarActa",
+        curso: estado.cursoActual,
+        idActa: idActa
+      })
+    });
+    const json = await resp.json();
+    if (!json.ok) throw new Error(json.error);
+    aplicarDatosRecibidos(json.data, true);
+    mostrarToast("🗑️ Acta eliminada");
+  } catch (err) {
+    mostrarToast("⚠️ Error: " + err.message, 4000);
+  }
+}
+
+/* ==================== PLANILLA GENERAL COMPLETA Y GUARDADO REMOTO ==================== */
 function renderTablaCompleta() {
   const cont = document.getElementById("contenedorTablaCompleta");
   if (!cont) return;
@@ -1677,6 +2954,7 @@ function renderTablaCompleta() {
 }
 
 async function guardarCeldaRemota(filaHoja, columnaHoja, selectElem) {
+  if (typeof esRolFamiliaActual === "function" && esRolFamiliaActual()) return;
   const val = selectElem.value;
   selectElem.className = obtenerClaseColorNota(val);
 
@@ -1783,7 +3061,6 @@ async function abrirModalNuevoAlumno() {
     e => normalizarClaveNombreAlumno(e.nombre) === claveNombre
   );
 
-  // Si ya existe un alumno con el mismo Apellido y Nombre, se reescribe su fila sin duplicar
   if (existente) {
     const ordenPropuesto = prompt(
       `ℹ️ "${existente.nombre}" ya está en la lista (Orden N° ${existente.orden}).\nSe actualizarán sus datos sin duplicarlo.\n\nN° de Orden:`,
