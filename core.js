@@ -162,11 +162,11 @@ function sincronizarSelectoresAppWA() {
   if (selInf) selInf.value = preferenciaAppWA;
 
   const nombreApp = obtenerEtiquetaAppWA();
-  const btnGuardar = document.getElementById("btnGuardarYEnviar");
-  if (btnGuardar) btnGuardar.textContent = `💾 Guardar Asistencia y Abrir ${nombreApp}`;
+  const btnGuardar = document.getElementById("btnSoloGuardarAsistencia");
+  if (btnGuardar && !btnGuardar.disabled) btnGuardar.textContent = "💾 Guardar Asistencia";
 
   const btnSoloAbrir = document.getElementById("btnSoloAbrirWA");
-  if (btnSoloAbrir) btnSoloAbrir.textContent = `📲 Solo Abrir ${nombreApp} (Sin volver a guardar)`;
+  if (btnSoloAbrir) btnSoloAbrir.textContent = `📲 Enviar por ${nombreApp}`;
 
   const btnEnvAlu = document.getElementById("btnEnviarWAAlumno");
   if (btnEnvAlu) btnEnvAlu.textContent = `📲 Enviar por ${nombreApp}`;

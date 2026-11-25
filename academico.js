@@ -1093,7 +1093,7 @@ function renderListaAsistencia() {
       <div class="no-activity-card">
         <strong>📌 Turno marcado como: ${etiquetaMotivo}</strong>
         <p>En este estado los estudiantes no asisten y <u>no se computan inasistencias (0.00)</u> en la planilla mensual.<br>
-        Tocá <b>"Guardar Asistencia y Abrir WhatsApp"</b> para dejar registrado el parte del día en el historial.</p>
+        Tocá <b>"Guardar Asistencia"</b> para dejar registrado el parte del día en el historial (y si querés, <b>"Enviar por WhatsApp"</b>).</p>
       </div>
     `;
   } else {
@@ -1291,8 +1291,8 @@ async function copiarPartePortapapeles() {
   }
 }
 
-async function guardarYEnviarWhatsAppBusiness() {
-  const btn = document.getElementById("btnGuardarYEnviar");
+async function guardarAsistenciaEnSheets(abrirWspDespues = false) {
+  const btn = document.getElementById("btnSoloGuardarAsistencia");
   const lista = obtenerEstudiantesFiltradosAsistencia();
   if (lista.length === 0) return mostrarToast("No hay alumnos activos");
 
@@ -1324,8 +1324,10 @@ async function guardarYEnviarWhatsAppBusiness() {
   };
 
   try {
-    btn.disabled = true;
-    btn.textContent = "⏳ Guardando en Sheets...";
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "⏳ Guardando en Sheets...";
+    }
     const resp = await fetch(scriptUrl, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
@@ -1337,14 +1339,22 @@ async function guardarYEnviarWhatsAppBusiness() {
     asistenciaActual = seleccionCongelada;
     materiasSinProfesorActual = sinProfCongelado;
     aplicarDatosRecibidos(json.data, true);
-    mostrarToast("✅ Parte guardado en Google Sheets");
-    abrirWhatsAppBusinessDirecto(mensajeCongelado);
+    mostrarToast("✅ Asistencia guardada en Google Sheets");
+    if (abrirWspDespues) {
+      abrirWhatsAppBusinessDirecto(mensajeCongelado);
+    }
   } catch (err) {
     mostrarToast("⚠️ Error: " + err.message, 4000);
   } finally {
-    btn.disabled = false;
-    btn.textContent = `💾 Guardar Asistencia y Abrir ${obtenerEtiquetaAppWA()}`;
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "💾 Guardar Asistencia";
+    }
   }
+}
+
+async function guardarYEnviarWhatsAppBusiness() {
+  return guardarAsistenciaEnSheets(true);
 }
 
 function renderTablaAcumuladoInasistencias() {
@@ -2953,19 +2963,33 @@ function renderTablaCompleta() {
   cont.innerHTML = html;
 }
 
-async function guardarCeldaRemota(filaHoja, columnaHoja, selectElem) {
+const colaGuardadoCeldas = [];
+let procesandoColaCeldas = false;
+
+window.addEventListener("beforeunload", (e) => {
+  if (procesandoColaCeldas || colaGuardadoCeldas.length > 0) {
+    e.preventDefault();
+    e.returnValue = "";
+  }
+});
+
+function guardarCeldaRemota(filaHoja, columnaHoja, selectElem) {
   if (typeof esRolFamiliaActual === "function" && esRolFamiliaActual()) return;
   const val = selectElem.value;
+  const cursoTarea = estado.cursoActual;
+  const numFila = Number(filaHoja);
+  const numCol = Number(columnaHoja);
+
   selectElem.className = obtenerClaseColorNota(val);
 
-  const aluLocal = (estado.estudiantes || []).find(e => e.filaHoja === Number(filaHoja));
+  const aluLocal = (estado.estudiantes || []).find(e => e.filaHoja === numFila);
   let matTocada = null;
   let scTocado = null;
 
   if (aluLocal && aluLocal.notas) {
     (estado.materias || []).forEach(m => {
       SUB_CAMPOS.forEach(sc => {
-        if (m.columnaInicio + sc.offset === Number(columnaHoja)) {
+        if (m.columnaInicio + sc.offset === numCol) {
           if (!aluLocal.notas[m.indice]) aluLocal.notas[m.indice] = {};
           aluLocal.notas[m.indice][sc.key] = val;
           matTocada = m;
@@ -2983,24 +3007,89 @@ async function guardarCeldaRemota(filaHoja, columnaHoja, selectElem) {
     renderTablaCompleta();
   }
 
-  try {
-    const resp = await fetch(scriptUrl, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({ accion: "actualizarCelda", curso: estado.cursoActual, filaHoja: filaHoja, columnaHoja: columnaHoja, valor: val })
+  // Si ya hay un cambio pendiente en cola para esta misma celda, actualizamos su valor
+  const idxExistente = colaGuardadoCeldas.findIndex(
+    t => t.curso === cursoTarea && t.filaHoja === numFila && t.columnaHoja === numCol
+  );
+  if (idxExistente !== -1) {
+    colaGuardadoCeldas[idxExistente].valor = val;
+  } else {
+    colaGuardadoCeldas.push({
+      curso: cursoTarea,
+      filaHoja: numFila,
+      columnaHoja: numCol,
+      valor: val
     });
-    const json = await resp.json();
-    if (!json.ok) throw new Error(json.error);
+  }
 
-    if (json.resultado && json.resultado.notasActualizadasFila && aluLocal) {
-      aluLocal.notas = json.resultado.notasActualizadasFila;
-      renderVistaMateria();
-      renderVistaAlumno();
-      renderTablaCompleta();
+  const pendientes = colaGuardadoCeldas.length + (procesandoColaCeldas ? 1 : 0);
+  mostrarToast(
+    pendientes > 1 ? `⏳ Guardando (${pendientes} cambios en cola)...` : "⏳ Guardando...",
+    4000
+  );
+
+  procesarColaGuardadoCeldas();
+}
+
+async function procesarColaGuardadoCeldas() {
+  if (procesandoColaCeldas) return;
+  procesandoColaCeldas = true;
+
+  let huboError = false;
+
+  while (colaGuardadoCeldas.length > 0) {
+    const tarea = colaGuardadoCeldas.shift();
+
+    try {
+      const resp = await fetch(scriptUrl, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({
+          accion: "actualizarCelda",
+          curso: tarea.curso,
+          filaHoja: tarea.filaHoja,
+          columnaHoja: tarea.columnaHoja,
+          valor: tarea.valor
+        })
+      });
+      const json = await resp.json();
+      if (!json.ok) throw new Error(json.error);
+
+      // Solo aplicamos la respuesta de Sheets si NO quedan otros cambios en cola para esta misma fila
+      const quedanPendientesMismaFila = colaGuardadoCeldas.some(
+        t => t.curso === tarea.curso && t.filaHoja === tarea.filaHoja
+      );
+
+      if (
+        !quedanPendientesMismaFila &&
+        estado.cursoActual === tarea.curso &&
+        json.resultado &&
+        json.resultado.notasActualizadasFila
+      ) {
+        const aluLocal = (estado.estudiantes || []).find(e => e.filaHoja === tarea.filaHoja);
+        if (aluLocal) {
+          aluLocal.notas = json.resultado.notasActualizadasFila;
+          renderVistaMateria();
+          renderVistaAlumno();
+          renderTablaCompleta();
+        }
+      }
+
+      if (colaGuardadoCeldas.length > 0) {
+        mostrarToast(
+          `⏳ Guardando (${colaGuardadoCeldas.length} pendiente${colaGuardadoCeldas.length > 1 ? "s" : ""})...`,
+          4000
+        );
+      }
+    } catch (err) {
+      huboError = true;
+      mostrarToast("⚠️ Error al guardar: " + err.message, 4500);
     }
+  }
+
+  procesandoColaCeldas = false;
+  if (!huboError) {
     mostrarToast("✅ Guardado");
-  } catch (err) {
-    mostrarToast("⚠️ Error: " + err.message);
   }
 }
 

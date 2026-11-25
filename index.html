@@ -243,18 +243,18 @@
         <div id="contenedorTachadosAsistencia"></div>
 
         <div class="action-buttons">
-          <button class="btn-main btn-w4b" id="btnGuardarYEnviar" onclick="guardarYEnviarWhatsAppBusiness()">
-            💾 Guardar Asistencia y Abrir WhatsApp
-          </button>
-
-          <div style="display:flex; gap:8px; flex-wrap:wrap;">
-            <button class="btn-outline" id="btnSoloAbrirWA" style="flex:1;" onclick="abrirWhatsAppBusinessDirecto()">
-              📲 Solo Abrir WhatsApp (Sin volver a guardar)
+          <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:8px;">
+            <button class="btn-main btn-print-blue" id="btnSoloGuardarAsistencia" onclick="guardarAsistenciaEnSheets(false)">
+              💾 Guardar Asistencia
             </button>
-            <button class="btn-outline" style="flex:1;" onclick="copiarPartePortapapeles()">
-              📋 Copiar texto del parte
+            <button class="btn-main btn-w4b" id="btnSoloAbrirWA" onclick="abrirWhatsAppBusinessDirecto()">
+              📲 Enviar por WhatsApp
             </button>
           </div>
+
+          <button class="btn-outline" style="width:100%;" onclick="copiarPartePortapapeles()">
+            📋 Copiar texto del parte
+          </button>
         </div>
 
         <div class="wa-preview-box" id="waPreviewBox"></div>
