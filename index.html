@@ -489,9 +489,34 @@
             </div>
           </div>
 
+          <div class="form-grid" style="margin-top:10px; background:#eff6ff; padding:8px; border-radius:6px; border:1px solid #bfdbfe;">
+            <div class="form-group">
+              <label>Especialidad / Plan Curricular (Anexo 3)</label>
+              <select id="ncEspecialidad" onchange="aplicarPlanCurricularANuevoCurso()">
+                <option value="">-- Elegir para autocompletar materias --</option>
+                <option value="CICLO_BASICO">Ciclo Básico (1° a 3°)</option>
+                <option value="ELECTROMECANICA">Técnico en Electromecánica (4° a 7°)</option>
+                <option value="ALIMENTOS">Técnico en Tecnología de los Alimentos (4° a 7°)</option>
+                <option value="NAVAL">Técnico Constructor Naval (4° a 7°)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Año del Plan</label>
+              <select id="ncAnioPlan" onchange="aplicarPlanCurricularANuevoCurso()">
+                <option value="1">1° Año</option>
+                <option value="2">2° Año</option>
+                <option value="3">3° Año</option>
+                <option value="4">4° Año</option>
+                <option value="5">5° Año</option>
+                <option value="6">6° Año</option>
+                <option value="7">7° Año</option>
+              </select>
+            </div>
+          </div>
+
           <div class="form-group" style="margin-top:10px;">
-            <label>Materias del Curso (Separadas por coma). Si es de 1° a 3° año y ponés "Taller", se autogeneran los 3 módulos del Ciclo Básico.</label>
-            <textarea id="ncListaMaterias" rows="2" placeholder="Prácticas del Lenguaje, Matemática, Ciencias Naturales, Taller"></textarea>
+            <label>Materias del Curso (se completan al elegir Especialidad y Año; en 1° a 3° "Taller" genera los 3 módulos + TALLER General)</label>
+            <textarea id="ncListaMaterias" rows="3" placeholder="Elegí especialidad y año arriba o escribí separadas por coma"></textarea>
           </div>
 
           <div class="form-group" style="margin-top:10px;">
@@ -514,6 +539,31 @@
       <div class="modal-header">
         <h2>Horarios y Docentes (<span id="lblCursoConfigHorario"></span>)</h2>
         <button class="btn-outline" onclick="cerrarModalConfigHorario()">✖ Cerrar</button>
+      </div>
+
+      <div class="form-grid" style="margin-bottom:10px; background:#eff6ff; padding:9px 10px; border-radius:8px; border:1px solid #bfdbfe;">
+        <div class="form-group">
+          <label>Especialidad (Catálogo de Materias)</label>
+          <select id="cfgEspecialidadHorario" onchange="alCambiarPlanEditorHorario()">
+            <option value="CICLO_BASICO">Ciclo Básico (1° a 3°)</option>
+            <option value="ELECTROMECANICA">Electromecánica (4° a 7°)</option>
+            <option value="ALIMENTOS">Tecnología de los Alimentos (4° a 7°)</option>
+            <option value="NAVAL">Constructor Naval (4° a 7°)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Año del Curso</label>
+          <select id="cfgAnioHorario" onchange="alCambiarPlanEditorHorario()">
+            <option value="">Todos los años</option>
+            <option value="1">1° Año</option>
+            <option value="2">2° Año</option>
+            <option value="3">3° Año</option>
+            <option value="4">4° Año</option>
+            <option value="5">5° Año</option>
+            <option value="6">6° Año</option>
+            <option value="7">7° Año</option>
+          </select>
+        </div>
       </div>
 
       <div class="form-grid" style="margin-bottom:12px; background:#f1f5f9; padding:10px; border-radius:8px;">
@@ -694,6 +744,7 @@
   </div>
 
   <div id="toast" class="toast"></div>
+  <script src="catalogo_materias.js"></script>
   <script src="core.js"></script>
   <script src="academico.js"></script>
   <script src="parte.js"></script>

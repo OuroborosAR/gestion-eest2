@@ -1,8 +1,9 @@
-const CACHE_NAME = 'eest2-cache-v13';
+const CACHE_NAME = 'eest2-cache-v14';
 const ASSETS = [
   './',
   './index.html',
   './styles.css',
+  './catalogo_materias.js',
   './core.js',
   './academico.js',
   './parte.js',

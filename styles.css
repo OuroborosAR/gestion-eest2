@@ -1451,7 +1451,7 @@ table.app-table th {
 
 .schedule-editor-row {
   display: grid;
-  grid-template-columns: 105px 115px 120px 85px 1.2fr 1fr 95px 38px;
+  grid-template-columns: 96px 176px 112px 72px 1.35fr 0.9fr 96px 34px;
   gap: 5px;
   align-items: center;
   margin-bottom: 6px;
@@ -1459,6 +1459,25 @@ table.app-table th {
   padding: 5px;
   border-radius: 6px;
   border: 1px solid #e2e8f0;
+}
+
+.ed-time-range {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.ed-time-range input[type="time"] {
+  padding: 4px 3px;
+  font-size: 11px;
+  min-width: 0;
+  flex: 1;
+}
+
+.ed-time-range span {
+  font-size: 10px;
+  font-weight: 800;
+  color: #64748b;
 }
 
 .schedule-editor-row input, .schedule-editor-row select {

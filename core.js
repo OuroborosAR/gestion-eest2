@@ -682,6 +682,10 @@ async function confirmarEliminarCurso(nombreCurso) {
     const json = await resp.json();
     if (!json.ok) throw new Error(json.error);
 
+    const espNC = document.getElementById("ncEspecialidad")?.value || "";
+    if (espNC && typeof guardarEspecialidadCursoLocal === "function") {
+      guardarEspecialidadCursoLocal(json.data.cursoActual, espNC);
+    }
     localStorage.setItem("eest2_ultimo_curso", json.data.cursoActual);
     aplicarDatosRecibidos(json.data, false);
     mostrarToast(`🗑️ Curso "${limpio}" eliminado`);
@@ -948,6 +952,35 @@ async function ejecutarCargaMasivaAlumnos() {
   }
 }
 
+function aplicarPlanCurricularANuevoCurso() {
+  const selEsp = document.getElementById("ncEspecialidad");
+  const selAnio = document.getElementById("ncAnioPlan");
+  const txtMat = document.getElementById("ncListaMaterias");
+  if (!selEsp || !selAnio || !txtMat || typeof obtenerMateriasCatalogo !== "function") return;
+
+  let esp = selEsp.value;
+  let anio = parseInt(selAnio.value, 10) || 0;
+  if (!esp) return;
+
+  if (esp === "CICLO_BASICO" && (anio < 1 || anio > 3)) {
+    anio = 1;
+    selAnio.value = "1";
+  } else if (esp !== "CICLO_BASICO" && (anio < 4 || anio > 7)) {
+    anio = 4;
+    selAnio.value = "4";
+  }
+
+  const lista = obtenerMateriasCatalogo(esp, anio);
+  if (esp === "CICLO_BASICO") {
+    // En Ciclo Básico, enviamos las materias de Teoría + Ed. Física + "Taller" (el backend autogenera los 3 módulos + TALLER General)
+    const filtradas = lista.filter(m => m.modalidad !== "TALLER").map(m => m.nombre);
+    filtradas.push("Taller");
+    txtMat.value = filtradas.join(", ");
+  } else {
+    txtMat.value = lista.map(m => m.nombre).join(", ");
+  }
+}
+
 function abrirModalConfigHorario() {
   const cursoLimpio = (estado.cursoActual || "Curso").replace(/_/g, " ");
   document.getElementById("lblCursoConfigHorario").textContent = cursoLimpio;
@@ -959,16 +992,33 @@ function abrirModalConfigHorario() {
   document.getElementById("cfgPrecTT").value = prec.tt || "___________";
   document.getElementById("cfgPrecTV").value = prec.tv || "___________";
 
+  const selEsp = document.getElementById("cfgEspecialidadHorario");
+  const selAnio = document.getElementById("cfgAnioHorario");
+  if (selEsp && typeof detectarEspecialidadCurso === "function") {
+    selEsp.value = detectarEspecialidadCurso(estado.cursoActual, estado.materias);
+  }
+  if (selAnio && typeof detectarAnioDesdeNombreCurso === "function") {
+    const aDet = detectarAnioDesdeNombreCurso(estado.cursoActual);
+    selAnio.value = aDet ? String(aDet) : (selEsp && selEsp.value === "CICLO_BASICO" ? "1" : "4");
+  }
+
   const bloquesActuales = (hp.bloques && hp.bloques.length > 0) ? hp.bloques : [];
-  filasEditorHorarioTemp = bloquesActuales.map(b => ({
-    dia: b.dia || "LUNES",
-    horario: b.horario || "07:30 A 09:30",
-    turno: b.turno || "TM - Teoría",
-    grupo: b.grupo || "Teo",
-    materia: b.materia || "",
-    profesor: b.profesor || "",
-    modalidad: b.modalidad || "TEORIA"
-  }));
+  filasEditorHorarioTemp = bloquesActuales.map(b => {
+    const tObj = typeof parsearHorarioTextoATime === "function"
+      ? parsearHorarioTextoATime(b.horario)
+      : { inicio: "07:40", fin: "09:40" };
+    return {
+      dia: b.dia || "LUNES",
+      horaInicio: tObj.inicio,
+      horaFin: tObj.fin,
+      horario: b.horario || "07:40 A 09:40",
+      turno: b.turno || "TM - Teoría",
+      grupo: b.grupo || "Teo",
+      materia: b.materia || "",
+      profesor: b.profesor || "",
+      modalidad: b.modalidad || "TEORIA"
+    };
+  });
 
   renderFilasEditorHorario();
   document.getElementById("modalConfigHorario").classList.add("open");
@@ -978,18 +1028,134 @@ function cerrarModalConfigHorario() {
   document.getElementById("modalConfigHorario").classList.remove("open");
 }
 
+function alCambiarPlanEditorHorario() {
+  sincronizarInputsEditorHorario();
+  const selEsp = document.getElementById("cfgEspecialidadHorario");
+  const selAnio = document.getElementById("cfgAnioHorario");
+  if (selEsp && typeof guardarEspecialidadCursoLocal === "function") {
+    guardarEspecialidadCursoLocal(estado.cursoActual, selEsp.value);
+    const aVal = parseInt(selAnio?.value || "0", 10);
+    if (selEsp.value === "CICLO_BASICO" && aVal > 3 && selAnio) selAnio.value = "1";
+    if (selEsp.value !== "CICLO_BASICO" && aVal > 0 && aVal < 4 && selAnio) selAnio.value = "4";
+  }
+  renderFilasEditorHorario();
+}
+
 function sincronizarInputsEditorHorario() {
   const filasDOM = document.querySelectorAll(".schedule-editor-row");
   filasDOM.forEach((rowEl, idx) => {
     if (!filasEditorHorarioTemp[idx]) return;
     filasEditorHorarioTemp[idx].dia = rowEl.querySelector(".ed-dia").value;
-    filasEditorHorarioTemp[idx].horario = rowEl.querySelector(".ed-horario").value;
+    const hIni = rowEl.querySelector(".ed-hora-ini")?.value || "";
+    const hFin = rowEl.querySelector(".ed-hora-fin")?.value || "";
+    filasEditorHorarioTemp[idx].horaInicio = hIni;
+    filasEditorHorarioTemp[idx].horaFin = hFin;
+    filasEditorHorarioTemp[idx].horario = typeof formatearHorarioDesdeTime === "function"
+      ? formatearHorarioDesdeTime(hIni, hFin)
+      : `${hIni} A ${hFin}`;
     filasEditorHorarioTemp[idx].turno = rowEl.querySelector(".ed-turno").value;
     filasEditorHorarioTemp[idx].grupo = rowEl.querySelector(".ed-grupo").value;
-    filasEditorHorarioTemp[idx].materia = rowEl.querySelector(".ed-materia").value;
+
+    const selMat = rowEl.querySelector(".ed-materia");
+    if (selMat && selMat.value !== "__MANUAL__") {
+      filasEditorHorarioTemp[idx].materia = selMat.value;
+    }
     filasEditorHorarioTemp[idx].profesor = rowEl.querySelector(".ed-profesor").value;
     filasEditorHorarioTemp[idx].modalidad = rowEl.querySelector(".ed-modalidad").value;
   });
+}
+
+function construirOpcionesMateriaEditorHTML(valorActual) {
+  const norm = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toUpperCase();
+  const valTrim = String(valorActual || "").trim();
+  const valNorm = norm(valTrim);
+
+  const selEsp = document.getElementById("cfgEspecialidadHorario")?.value || "ELECTROMECANICA";
+  const selAnio = document.getElementById("cfgAnioHorario")?.value || "";
+
+  const yaIncluidas = new Set();
+  let matched = false;
+  let html = `<option value="">-- Elegir materia --</option>`;
+
+  // 1. Materias ya cargadas en la planilla de este curso (evita duplicados)
+  const matsPlanilla = (estado.materias || []).filter(m => !m.esResumenTallerCB);
+  if (matsPlanilla.length > 0) {
+    html += `<optgroup label="📋 Materias de la planilla de este curso">`;
+    matsPlanilla.forEach(m => {
+      const nom = String(m.nombre || "").trim();
+      const k = norm(nom);
+      if (!k || yaIncluidas.has(k)) return;
+      yaIncluidas.add(k);
+      const isSel = (k === valNorm);
+      if (isSel) matched = true;
+      html += `<option value="${escHtml(nom)}" ${isSel ? "selected" : ""}>${escHtml(nom)}</option>`;
+    });
+    html += `</optgroup>`;
+  }
+
+  // 2. Diseño Curricular Oficial (Anexo 3) para la especialidad y año elegidos
+  if (typeof obtenerMateriasCatalogo === "function") {
+    const cat = obtenerMateriasCatalogo(selEsp, selAnio);
+    const restantes = cat.filter(c => !yaIncluidas.has(norm(c.nombre)));
+    if (restantes.length > 0) {
+      const espLbl = (CATALOGO_CURRICULAR_EEST2[selEsp]?.label || selEsp) + (selAnio ? ` — ${selAnio}° Año` : "");
+      html += `<optgroup label="📚 Diseño Curricular (${escHtml(espLbl)})">`;
+      restantes.forEach(c => {
+        const k = norm(c.nombre);
+        yaIncluidas.add(k);
+        const isSel = (!matched && k === valNorm);
+        if (isSel) matched = true;
+        const ico = c.modalidad === "ED_FISICA" ? "🏃 " : (c.modalidad === "TALLER" ? "🔧 " : "📘 ");
+        html += `<option value="${escHtml(c.nombre)}" ${isSel ? "selected" : ""}>${ico}${escHtml(c.nombre)}</option>`;
+      });
+      html += `</optgroup>`;
+    }
+  }
+
+  // 3. Si el bloque ya tenía un nombre abreviado o distinto, conservarlo seleccionado para no perderlo
+  if (valTrim && !matched) {
+    html += `<optgroup label="📝 Nombre actual del bloque">`;
+    html += `<option value="${escHtml(valTrim)}" selected>${escHtml(valTrim)}</option>`;
+    html += `</optgroup>`;
+  }
+
+  html += `<option value="__MANUAL__">✏️ Otra materia (escribir manual)...</option>`;
+  return html;
+}
+
+function alCambiarMateriaEditorHorario(idx, nuevoVal) {
+  sincronizarInputsEditorHorario();
+  const item = filasEditorHorarioTemp[idx];
+  if (!item) return;
+
+  if (nuevoVal === "__MANUAL__") {
+    const manual = prompt("Escribí el nombre exacto de la materia:", item.materia || "");
+    if (manual && manual.trim()) {
+      item.materia = manual.trim();
+    }
+  } else {
+    item.materia = nuevoVal;
+    const selEsp = document.getElementById("cfgEspecialidadHorario")?.value || "ELECTROMECANICA";
+    const selAnio = document.getElementById("cfgAnioHorario")?.value || "";
+    const modCat = typeof buscarModalidadEnCatalogo === "function"
+      ? buscarModalidadEnCatalogo(nuevoVal, selEsp, selAnio)
+      : "";
+
+    if (modCat) {
+      item.modalidad = modCat;
+      if (modCat === "ED_FISICA") {
+        item.turno = "Educación Física";
+        item.grupo = "Curso";
+      } else if (modCat === "TALLER" && item.turno.toUpperCase().indexOf("TALLER") === -1) {
+        item.turno = "TT - Taller";
+        if (!item.grupo || item.grupo === "Teo") item.grupo = "Gr.1";
+      } else if (modCat === "TEORIA" && item.turno.toUpperCase().indexOf("TEOR") === -1) {
+        item.turno = "TT - Teoría";
+        item.grupo = "Teo";
+      }
+    }
+  }
+  renderFilasEditorHorario();
 }
 
 function renderFilasEditorHorario() {
@@ -998,29 +1164,38 @@ function renderFilasEditorHorario() {
 
   let html = "";
   filasEditorHorarioTemp.forEach((item, idx) => {
+    const hIni = item.horaInicio || (typeof parsearHorarioTextoATime === "function" ? parsearHorarioTextoATime(item.horario).inicio : "07:40");
+    const hFin = item.horaFin || (typeof parsearHorarioTextoATime === "function" ? parsearHorarioTextoATime(item.horario).fin : "09:40");
+
     html += `
       <div class="schedule-editor-row">
-        <select class="ed-dia">
+        <select class="ed-dia" title="Día">
           ${DIAS_SEMANA_ORDEN.map(d => `<option value="${d}" ${item.dia === d ? 'selected' : ''}>${d}</option>`).join("")}
         </select>
-        <input type="text" class="ed-horario" value="${item.horario || ''}">
-        <select class="ed-turno" onchange="alCambiarTurnoEditorHorario(${idx}, this.value)">
+        <div class="ed-time-range" title="Horario (Desde - Hasta)">
+          <input type="time" class="ed-hora-ini" value="${escHtml(hIni)}">
+          <span>a</span>
+          <input type="time" class="ed-hora-fin" value="${escHtml(hFin)}">
+        </div>
+        <select class="ed-turno" title="Turno" onchange="alCambiarTurnoEditorHorario(${idx}, this.value)">
           ${["TM - Teoría", "TT - Teoría", "TV - Teoría", "TM - Taller", "TT - Taller", "TT/TV - Taller", "TV - Taller", "Educación Física"]
             .map(t => `<option value="${t}" ${item.turno === t ? 'selected' : ''}>${t}</option>`).join("")}
         </select>
-        <input type="text" class="ed-grupo" value="${item.grupo || ''}">
-        <input type="text" class="ed-materia" value="${item.materia || ''}">
-        <input type="text" class="ed-profesor" value="${item.profesor || ''}">
-        <select class="ed-modalidad">
+        <input type="text" class="ed-grupo" placeholder="Teo / Gr.E" value="${escHtml(item.grupo || '')}">
+        <select class="ed-materia" title="Materia" onchange="alCambiarMateriaEditorHorario(${idx}, this.value)">
+          ${construirOpcionesMateriaEditorHTML(item.materia)}
+        </select>
+        <input type="text" class="ed-profesor" placeholder="Apellido docente" value="${escHtml(item.profesor || '')}">
+        <select class="ed-modalidad" title="Modalidad">
           <option value="TEORIA" ${(item.modalidad !== "TALLER" && item.modalidad !== "ED_FISICA") ? "selected" : ""}>📘 Teoría</option>
           <option value="TALLER" ${item.modalidad === "TALLER" ? "selected" : ""}>🔧 Taller</option>
-          <option value="ED_FISICA" ${item.modalidad === "ED_FISICA" ? "selected" : ""}>🏃 Ed. Física (No imprime)</option>
+          <option value="ED_FISICA" ${item.modalidad === "ED_FISICA" ? "selected" : ""}>🏃 Ed. Física</option>
         </select>
         <button type="button" class="btn-danger-outline" style="padding:5px;" onclick="eliminarFilaEditorHorario(${idx})">🗑️</button>
       </div>
     `;
   });
-  cont.innerHTML = html;
+  cont.innerHTML = html || `<p style="padding:10px; color:#64748b; font-size:12px;">Sin bloques cargados. Tocá "+ Bloque Teoría/Taller" o "+ Ed. Física".</p>`;
 }
 
 function alCambiarTurnoEditorHorario(idx, nuevoTurno) {
@@ -1031,7 +1206,7 @@ function alCambiarTurnoEditorHorario(idx, nuevoTurno) {
   const up = String(nuevoTurno || "").toUpperCase();
   if (up.indexOf("FÍSICA") !== -1 || up.indexOf("FISICA") !== -1) {
     item.modalidad = "ED_FISICA";
-    if (!item.materia) item.materia = "EDUCACIÓN FÍSICA";
+    if (!item.materia) item.materia = "Educación Física";
     if (!item.grupo || item.grupo === "Teo") item.grupo = "Curso";
   } else if (up.indexOf("TALLER") !== -1) {
     item.modalidad = "TALLER";
@@ -1046,17 +1221,21 @@ function agregarFilaEditorHorario(diaPorDefecto = "LUNES", tipoRapido = "TEORIA"
   if (tipoRapido === "ED_FISICA") {
     filasEditorHorarioTemp.push({
       dia: diaPorDefecto,
+      horaInicio: "08:00",
+      horaFin: "09:00",
       horario: "08:00 A 09:00",
       turno: "Educación Física",
       grupo: "Curso",
-      materia: "EDUCACIÓN FÍSICA",
+      materia: "Educación Física",
       profesor: "",
       modalidad: "ED_FISICA"
     });
   } else {
     filasEditorHorarioTemp.push({
       dia: diaPorDefecto,
-      horario: "07:30 A 09:30",
+      horaInicio: "07:40",
+      horaFin: "09:40",
+      horario: "07:40 A 09:40",
       turno: "TM - Teoría",
       grupo: "Teo",
       materia: "",
