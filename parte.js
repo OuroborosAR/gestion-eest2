@@ -61,9 +61,18 @@ function silabearTextoEspanol(texto) {
 
 const pdMonthNames = ["ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO", "JULIO", "AGOSTO", "SEPTIEMBRE", "OCTUBRE", "NOVIEMBRE", "DICIEMBRE"];
 
+function pdEsBloqueEducacionFisica(b) {
+  if (!b) return false;
+  const mod = String(b.modalidad || "").trim().toUpperCase();
+  const tur = String(b.turno || "").trim().toUpperCase();
+  const mat = String(b.materia || "").trim().toUpperCase();
+  return mod === "ED_FISICA" || tur.indexOf("FÍSICA") !== -1 || tur.indexOf("FISICA") !== -1 || mat === "EDUCACIÓN FÍSICA" || mat === "EDUCACION FISICA";
+}
+
 function construirDatosParteDinamico() {
   const hp = estado.horarioParte || {};
-  const bloquesOrigen = (hp.bloques && hp.bloques.length > 0) ? hp.bloques : [];
+  const bloquesOrigen = ((hp.bloques && hp.bloques.length > 0) ? hp.bloques : [])
+    .filter(b => !pdEsBloqueEducacionFisica(b));
   const definicionDias = [
     { dayName: "LUNES", dayIndex: 1, sheetGroup: 1, p2Height: "88mm" },
     { dayName: "MARTES", dayIndex: 2, sheetGroup: 1, p2Height: "84mm" },

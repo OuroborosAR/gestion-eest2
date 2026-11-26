@@ -1004,7 +1004,7 @@ function renderFilasEditorHorario() {
           ${DIAS_SEMANA_ORDEN.map(d => `<option value="${d}" ${item.dia === d ? 'selected' : ''}>${d}</option>`).join("")}
         </select>
         <input type="text" class="ed-horario" value="${item.horario || ''}">
-        <select class="ed-turno">
+        <select class="ed-turno" onchange="alCambiarTurnoEditorHorario(${idx}, this.value)">
           ${["TM - Teoría", "TT - Teoría", "TV - Teoría", "TM - Taller", "TT - Taller", "TT/TV - Taller", "TV - Taller", "Educación Física"]
             .map(t => `<option value="${t}" ${item.turno === t ? 'selected' : ''}>${t}</option>`).join("")}
         </select>
@@ -1012,8 +1012,9 @@ function renderFilasEditorHorario() {
         <input type="text" class="ed-materia" value="${item.materia || ''}">
         <input type="text" class="ed-profesor" value="${item.profesor || ''}">
         <select class="ed-modalidad">
-          <option value="TEORIA" ${item.modalidad !== "TALLER" ? "selected" : ""}>📘 Teoría</option>
+          <option value="TEORIA" ${(item.modalidad !== "TALLER" && item.modalidad !== "ED_FISICA") ? "selected" : ""}>📘 Teoría</option>
           <option value="TALLER" ${item.modalidad === "TALLER" ? "selected" : ""}>🔧 Taller</option>
+          <option value="ED_FISICA" ${item.modalidad === "ED_FISICA" ? "selected" : ""}>🏃 Ed. Física (No imprime)</option>
         </select>
         <button type="button" class="btn-danger-outline" style="padding:5px;" onclick="eliminarFilaEditorHorario(${idx})">🗑️</button>
       </div>
@@ -1022,18 +1023,249 @@ function renderFilasEditorHorario() {
   cont.innerHTML = html;
 }
 
-function agregarFilaEditorHorario(diaPorDefecto = "LUNES") {
+function alCambiarTurnoEditorHorario(idx, nuevoTurno) {
   sincronizarInputsEditorHorario();
-  filasEditorHorarioTemp.push({
-    dia: diaPorDefecto,
-    horario: "07:30 A 09:30",
-    turno: "TM - Teoría",
-    grupo: "Teo",
-    materia: "",
-    profesor: "",
-    modalidad: "TEORIA"
-  });
+  const item = filasEditorHorarioTemp[idx];
+  if (!item) return;
+  item.turno = nuevoTurno;
+  const up = String(nuevoTurno || "").toUpperCase();
+  if (up.indexOf("FÍSICA") !== -1 || up.indexOf("FISICA") !== -1) {
+    item.modalidad = "ED_FISICA";
+    if (!item.materia) item.materia = "EDUCACIÓN FÍSICA";
+    if (!item.grupo || item.grupo === "Teo") item.grupo = "Curso";
+  } else if (up.indexOf("TALLER") !== -1) {
+    item.modalidad = "TALLER";
+  } else {
+    item.modalidad = "TEORIA";
+  }
   renderFilasEditorHorario();
+}
+
+function agregarFilaEditorHorario(diaPorDefecto = "LUNES", tipoRapido = "TEORIA") {
+  sincronizarInputsEditorHorario();
+  if (tipoRapido === "ED_FISICA") {
+    filasEditorHorarioTemp.push({
+      dia: diaPorDefecto,
+      horario: "08:00 A 09:00",
+      turno: "Educación Física",
+      grupo: "Curso",
+      materia: "EDUCACIÓN FÍSICA",
+      profesor: "",
+      modalidad: "ED_FISICA"
+    });
+  } else {
+    filasEditorHorarioTemp.push({
+      dia: diaPorDefecto,
+      horario: "07:30 A 09:30",
+      turno: "TM - Teoría",
+      grupo: "Teo",
+      materia: "",
+      profesor: "",
+      modalidad: "TEORIA"
+    });
+  }
+  renderFilasEditorHorario();
+}
+
+function abrirModalGrillaHorario() {
+  const modal = document.getElementById("modalGrillaHorario");
+  if (!modal) return;
+  const cursoLimpio = (estado.cursoActual || "Curso").replace(/_/g, " ");
+  const lbl = document.getElementById("lblCursoGrillaHorario");
+  if (lbl) lbl.textContent = cursoLimpio;
+  renderGrillaHorarioVisual();
+  modal.classList.add("open");
+}
+
+function cerrarModalGrillaHorario() {
+  const modal = document.getElementById("modalGrillaHorario");
+  if (modal) modal.classList.remove("open");
+}
+
+function obtenerHoraOrdenMinutos(horarioStr) {
+  const m = String(horarioStr || "").match(/(\d{1,2})[:.](\d{2})/);
+  if (!m) return 9999;
+  return parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+}
+
+function renderGrillaHorarioVisual() {
+  const cont = document.getElementById("contenedorGrillaHorarioVisual");
+  if (!cont) return;
+  const bloques = (estado.horarioParte && estado.horarioParte.bloques) || [];
+  if (bloques.length === 0) {
+    cont.innerHTML = `<p style="padding:14px; color:#64748b; text-align:center;">Aún no hay horarios cargados para este curso. Tocá "Editar Horarios" para agregar materias.</p>`;
+    return;
+  }
+
+  let html = `<div class="schedule-grid-board">`;
+  DIAS_SEMANA_ORDEN.forEach(dia => {
+    const delDia = bloques
+      .filter(b => String(b.dia || "").trim().toUpperCase() === dia)
+      .sort((a, b) => obtenerHoraOrdenMinutos(a.horario) - obtenerHoraOrdenMinutos(b.horario));
+
+    html += `
+      <div class="sg-day-col">
+        <div class="sg-day-hdr">${dia}</div>
+        <div class="sg-day-body">
+    `;
+
+    if (delDia.length === 0) {
+      html += `<div class="sg-empty">Sin clases</div>`;
+    } else {
+      delDia.forEach(b => {
+        const mod = String(b.modalidad || "").toUpperCase();
+        const turUp = String(b.turno || "").toUpperCase();
+        const esEF = mod === "ED_FISICA" || turUp.indexOf("FÍSICA") !== -1 || turUp.indexOf("FISICA") !== -1;
+        const esTal = !esEF && (mod === "TALLER" || Boolean(b.esTaller));
+        const clCard = esEF ? "sg-card-ef" : (esTal ? "sg-card-taller" : "sg-card-teoria");
+        const tagTipo = esEF ? "🏃 Ed. Física" : (esTal ? "🔧 Taller" : "📘 Teoría");
+
+        html += `
+          <div class="sg-card ${clCard}">
+            <div class="sg-card-top">
+              <span class="sg-time">${escHtml(b.horario || "—")}</span>
+              <span class="sg-grp">${escHtml(b.grupo || (esTal ? "Taller" : "Curso"))}</span>
+            </div>
+            <div class="sg-mat">${escHtml(b.materia || "Sin materia")}</div>
+            <div class="sg-prof">${escHtml(b.profesor || "Sin docente")}</div>
+            <div class="sg-foot">${tagTipo} • ${escHtml(b.turno || "")}</div>
+          </div>
+        `;
+      });
+    }
+
+    html += `</div></div>`;
+  });
+  html += `</div>`;
+  cont.innerHTML = html;
+}
+
+async function exportarGrillaHorarioImagen() {
+  const bloques = (estado.horarioParte && estado.horarioParte.bloques) || [];
+  if (bloques.length === 0) return mostrarToast("No hay horarios cargados para exportar");
+  const cursoLimpio = (estado.cursoActual || "Curso").replace(/_/g, " ");
+
+  try {
+    mostrarToast("⏳ Generando imagen del horario...", 3000);
+    const W = 1120;
+    const PAD = 18;
+    const CW = W - PAD * 2;
+    const GAP = 10;
+    const COL_W = (CW - GAP * 4) / 5;
+    const CARD_H = 74;
+    const CARD_GAP = 8;
+    const SCALE = 2;
+
+    const porDia = DIAS_SEMANA_ORDEN.map(dia =>
+      bloques
+        .filter(b => String(b.dia || "").trim().toUpperCase() === dia)
+        .sort((a, b) => obtenerHoraOrdenMinutos(a.horario) - obtenerHoraOrdenMinutos(b.horario))
+    );
+    const maxFilas = Math.max(1, ...porDia.map(arr => arr.length));
+    const H = PAD + 52 + 12 + 30 + maxFilas * (CARD_H + CARD_GAP) + 28 + PAD;
+
+    const canvas = document.createElement("canvas");
+    canvas.width = W * SCALE;
+    canvas.height = H * SCALE;
+    const ctx = canvas.getContext("2d");
+    ctx.scale(SCALE, SCALE);
+
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, W, H);
+
+    // Header
+    ctx.fillStyle = "#1e3a8a";
+    ctx.fillRect(PAD, PAD, CW, 48);
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "bold 16px Arial, sans-serif";
+    ctx.fillText(`HORARIO SEMANAL — CURSO: ${cursoLimpio.toUpperCase()}`, PAD + 14, PAD + 22);
+    ctx.fillStyle = "#bfdbfe";
+    ctx.font = "bold 11.5px Arial, sans-serif";
+    ctx.fillText('E.E.S.T. N° 2 "Pbro. Dr. Manuel de San Ginés" — San Fernando', PAD + 14, PAD + 39);
+
+    ctx.textAlign = "right";
+    ctx.fillStyle = "#e2e8f0";
+    ctx.font = "bold 11px Arial, sans-serif";
+    ctx.fillText("📘 Teoría   |   🔧 Taller   |   🏃 Ed. Física", PAD + CW - 14, PAD + 30);
+    ctx.textAlign = "left";
+
+    const topGrid = PAD + 60;
+
+    DIAS_SEMANA_ORDEN.forEach((dia, dIdx) => {
+      const x = PAD + dIdx * (COL_W + GAP);
+      // Day header
+      ctx.fillStyle = "#0f172a";
+      ctx.fillRect(x, topGrid, COL_W, 26);
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "bold 12px Arial, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(dia, x + COL_W / 2, topGrid + 17);
+      ctx.textAlign = "left";
+
+      const items = porDia[dIdx];
+      if (items.length === 0) {
+        ctx.fillStyle = "#f8fafc";
+        ctx.fillRect(x, topGrid + 32, COL_W, 44);
+        ctx.strokeStyle = "#cbd5e1";
+        ctx.strokeRect(x, topGrid + 32, COL_W, 44);
+        ctx.fillStyle = "#94a3b8";
+        ctx.font = "italic 11px Arial, sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText("Sin clases", x + COL_W / 2, topGrid + 58);
+        ctx.textAlign = "left";
+      } else {
+        items.forEach((b, bIdx) => {
+          const cy = topGrid + 32 + bIdx * (CARD_H + CARD_GAP);
+          const mod = String(b.modalidad || "").toUpperCase();
+          const turUp = String(b.turno || "").toUpperCase();
+          const esEF = mod === "ED_FISICA" || turUp.indexOf("FÍSICA") !== -1 || turUp.indexOf("FISICA") !== -1;
+          const esTal = !esEF && (mod === "TALLER" || Boolean(b.esTaller));
+
+          const bg = esEF ? "#ecfdf5" : (esTal ? "#eff6ff" : "#f8fafc");
+          const brd = esEF ? "#34d399" : (esTal ? "#60a5fa" : "#cbd5e1");
+          const acc = esEF ? "#065f46" : (esTal ? "#1d4ed8" : "#0f172a");
+
+          ctx.fillStyle = bg;
+          ctx.fillRect(x, cy, COL_W, CARD_H);
+          ctx.strokeStyle = brd;
+          ctx.lineWidth = 1.4;
+          ctx.strokeRect(x, cy, COL_W, CARD_H);
+
+          // Left accent bar
+          ctx.fillStyle = acc;
+          ctx.fillRect(x, cy, 4, CARD_H);
+
+          ctx.fillStyle = acc;
+          ctx.font = "bold 10.5px Arial, sans-serif";
+          ctx.fillText(truncarTextoCanvas(ctx, b.horario || "—", COL_W - 70), x + 9, cy + 16);
+
+          ctx.textAlign = "right";
+          ctx.fillStyle = "#475569";
+          ctx.font = "bold 10px Arial, sans-serif";
+          ctx.fillText(truncarTextoCanvas(ctx, b.grupo || "", 58), x + COL_W - 7, cy + 16);
+          ctx.textAlign = "left";
+
+          ctx.fillStyle = "#0f172a";
+          ctx.font = "bold 12px Arial, sans-serif";
+          ctx.fillText(truncarTextoCanvas(ctx, b.materia || "", COL_W - 16), x + 9, cy + 35);
+
+          ctx.fillStyle = "#334155";
+          ctx.font = "11px Arial, sans-serif";
+          ctx.fillText(truncarTextoCanvas(ctx, b.profesor || "Sin docente", COL_W - 16), x + 9, cy + 51);
+
+          ctx.fillStyle = "#64748b";
+          ctx.font = "bold 9.5px Arial, sans-serif";
+          ctx.fillText(truncarTextoCanvas(ctx, b.turno || "", COL_W - 16), x + 9, cy + 66);
+        });
+      }
+    });
+
+    const blob = await canvasABlobPNG(canvas);
+    const slug = (estado.cursoActual || "curso").replace(/\s+/g, "_");
+    await compartirODescargarImagenPNG(blob, `Horario_${slug}.png`, `Horario ${cursoLimpio}`, `Horario Semanal — ${cursoLimpio}`);
+  } catch (err) {
+    mostrarToast("⚠️ Error al exportar horario: " + err.message, 4000);
+  }
 }
 
 function eliminarFilaEditorHorario(idx) {

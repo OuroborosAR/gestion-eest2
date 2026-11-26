@@ -462,18 +462,26 @@ function normalizarLetraGrupo(grpRaw) {
   return s;
 }
 
+function esBloqueEdFisica(bloque) {
+  if (!bloque) return false;
+  const mod = String(bloque.modalidad || "").toUpperCase().trim();
+  const tur = String(bloque.turno || "").toUpperCase().trim();
+  const mat = String(bloque.materia || "").toUpperCase().trim();
+  return mod === "ED_FISICA" || tur.indexOf("FÍSICA") !== -1 || tur.indexOf("FISICA") !== -1 || mat.indexOf("EDUCACIÓN FÍSICA") !== -1 || mat.indexOf("EDUCACION FISICA") !== -1;
+}
+
 function bloqueCoincideConTurnoParte(bloque, turnoGrupoStr) {
   const tParte = String(turnoGrupoStr || "").toUpperCase().trim();
   const tBloque = String(bloque.turno || "").toUpperCase().trim();
   const modBloque = String(bloque.modalidad || "").toUpperCase().trim();
+  const esEdFisBloque = esBloqueEdFisica(bloque);
+  const esEdFisParte = tParte.indexOf("EDUCACIÓN FÍSICA") !== -1 || tParte.indexOf("EDUCACION FISICA") !== -1;
+
+  if (esEdFisParte) return esEdFisBloque;
+  if (esEdFisBloque) return false;
+
   const esTalBloque = modBloque === "TALLER" || Boolean(bloque.esTaller) || tBloque.indexOf("TALLER") !== -1;
   const esTalParte = tParte.indexOf("TALLER") !== -1;
-
-  if (tParte.indexOf("EDUCACIÓN FÍSICA") !== -1 || tParte.indexOf("EDUCACION FISICA") !== -1) {
-    return String(bloque.materia || "").toUpperCase().indexOf("FÍSICA") !== -1 ||
-           String(bloque.materia || "").toUpperCase().indexOf("FISICA") !== -1 ||
-           tBloque.indexOf("FÍSICA") !== -1;
-  }
 
   if (esTalParte !== esTalBloque) return false;
 
@@ -805,6 +813,26 @@ function alCambiarFechaOTurno() {
   renderListaAsistencia();
 }
 
+
+function autoseleccionarModalidadDia(fechaDDMMYYYY) {
+  const selMod = document.getElementById("asistModalidad");
+  if (!selMod) return;
+  const diaSem = obtenerDiaSemanaDesdeFechaDDMMYYYY(fechaDDMMYYYY || formatearFechaInput());
+  const bloques = ((estado.horarioParte && estado.horarioParte.bloques) || [])
+    .filter(b => String(b.dia || "").trim().toUpperCase() === diaSem && bloqueTieneHorarioYProfesor(b));
+
+  const tieneTeo = bloques.some(b => !esBloqueEdFisica(b) && String(b.modalidad || "").toUpperCase() !== "TALLER" && !b.esTaller);
+  const tieneTal = bloques.some(b => !esBloqueEdFisica(b) && (String(b.modalidad || "").toUpperCase() === "TALLER" || Boolean(b.esTaller)));
+  const tieneEF = bloques.some(b => esBloqueEdFisica(b));
+
+  // Regla actual de la escuela: siempre 0.50 (DOBLE), salvo triple turno (Teoría + Taller + Ed. Física = 0.33)
+  if (tieneTeo && tieneTal && tieneEF) {
+    selMod.value = "TRIPLE";
+  } else {
+    selMod.value = "DOBLE";
+  }
+}
+
 function cargarParteGuardadoSiExiste() {
   asistenciaActual = {};
   materiasSinProfesorActual = [];
@@ -825,6 +853,7 @@ function cargarParteGuardadoSiExiste() {
   if (!registroExistente) {
     if (selEstDia) selEstDia.value = "NORMAL";
     if (inpObs) inpObs.value = "";
+    autoseleccionarModalidadDia(fechaBuscada);
     if (banner) {
       banner.className = "edit-mode-banner new-entry";
       banner.textContent = `🆕 Parte nuevo para ${fechaBuscada} (${turnoBuscado}).`;

@@ -1356,6 +1356,99 @@ table.app-table th {
   background: #fecaca;
 }
 
+
+.schedule-grid-board {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(170px, 1fr));
+  gap: 8px;
+  min-width: 860px;
+}
+
+.sg-day-col {
+  background: #f8fafc;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.sg-day-hdr {
+  background: #0f172a;
+  color: #ffffff;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 6px;
+  letter-spacing: 0.4px;
+}
+
+.sg-day-body {
+  padding: 7px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  flex: 1;
+}
+
+.sg-empty {
+  text-align: center;
+  color: #94a3b8;
+  font-size: 11.5px;
+  font-style: italic;
+  padding: 16px 6px;
+}
+
+.sg-card {
+  border-radius: 7px;
+  padding: 7px 8px;
+  border: 1px solid #cbd5e1;
+  border-left-width: 4px;
+  background: #ffffff;
+}
+
+.sg-card-teoria { border-left-color: #334155; background: #ffffff; }
+.sg-card-taller { border-left-color: #1d4ed8; background: #eff6ff; border-color: #bfdbfe; }
+.sg-card-ef { border-left-color: #059669; background: #ecfdf5; border-color: #a7f3d0; }
+
+.sg-card-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 4px;
+  font-size: 10.5px;
+  font-weight: 800;
+  color: #1e293b;
+}
+
+.sg-grp {
+  background: rgba(15, 23, 42, 0.08);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 9.5px;
+}
+
+.sg-mat {
+  font-size: 12px;
+  font-weight: 900;
+  color: #0f172a;
+  margin-top: 3px;
+}
+
+.sg-prof {
+  font-size: 11px;
+  color: #334155;
+  font-weight: 600;
+  margin-top: 1px;
+}
+
+.sg-foot {
+  font-size: 9.5px;
+  color: #64748b;
+  font-weight: 700;
+  margin-top: 4px;
+}
+
 .schedule-editor-row {
   display: grid;
   grid-template-columns: 105px 115px 120px 85px 1.2fr 1fr 95px 38px;

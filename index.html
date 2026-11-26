@@ -300,7 +300,10 @@
 
         <div class="pd-toolbar-group">
           <button type="button" class="pd-btn-action pd-btn-config" onclick="abrirModalConfigHorario()">
-            🗓️ Configurar Materias, Horarios y Profes
+            🗓️ Editar Horarios
+          </button>
+          <button type="button" class="pd-btn-action" style="background:#1e3a8a;" onclick="abrirModalGrillaHorario()">
+            📅 Ver Grilla Semanal
           </button>
           <button type="button" class="pd-btn-action pd-btn-month" onclick="pdRenderCurrentSelection()">📅 Ver Mes Actual</button>
           <button type="button" class="pd-btn-action pd-btn-year" onclick="pdRenderFullYear()">📚 Ciclo Lectivo (Mar-Dic)</button>
@@ -531,7 +534,9 @@
       <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:8px;">
         <strong style="font-size:12.5px; color:#0f172a;">Bloques de Clases (Lunes a Viernes):</strong>
         <div style="display:flex; gap:6px; flex-wrap:wrap;">
-          <button type="button" class="btn-outline" onclick="agregarFilaEditorHorario('LUNES')">+ Agregar Bloque</button>
+          <button type="button" class="btn-outline" onclick="abrirModalGrillaHorario()">📅 Ver Grilla Semanal</button>
+          <button type="button" class="btn-outline" onclick="agregarFilaEditorHorario('LUNES', 'TEORIA')">+ Bloque Teoría/Taller</button>
+          <button type="button" class="btn-success-outline" onclick="agregarFilaEditorHorario('LUNES', 'ED_FISICA')">+ Ed. Física</button>
         </div>
       </div>
 
@@ -550,6 +555,24 @@
           </button>
         </div>
       </div>
+    </div>
+  </div>
+  <div id="modalGrillaHorario" class="modal-backdrop">
+    <div class="modal-box" style="max-width:1060px;">
+      <div class="modal-header">
+        <h2>Horario Semanal — <span id="lblCursoGrillaHorario"></span></h2>
+        <div style="display:flex; gap:6px; flex-wrap:wrap;">
+          <button type="button" class="btn-main btn-w4b" style="padding:7px 12px; font-size:12px;" onclick="exportarGrillaHorarioImagen()">🖼️ Compartir / Descargar Imagen</button>
+          <button type="button" class="btn-outline" onclick="cerrarModalGrillaHorario(); abrirModalConfigHorario();">✏️ Editar</button>
+          <button type="button" class="btn-outline" onclick="cerrarModalGrillaHorario()">✖ Cerrar</button>
+        </div>
+      </div>
+      <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:10px; font-size:11.5px; font-weight:700;">
+        <span class="badge" style="background:#f1f5f9; color:#0f172a; border:1px solid #cbd5e1;">📘 Teoría</span>
+        <span class="badge" style="background:#eff6ff; color:#1d4ed8; border:1px solid #93c5fd;">🔧 Taller</span>
+        <span class="badge" style="background:#ecfdf5; color:#065f46; border:1px solid #6ee7b7;">🏃 Ed. Física (solo asistencia, no sale en Parte PDF)</span>
+      </div>
+      <div id="contenedorGrillaHorarioVisual" style="overflow-x:auto;"></div>
     </div>
   </div>
   <div id="modalCargaMasivaAlumnos" class="modal-backdrop">
