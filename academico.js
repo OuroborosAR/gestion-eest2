@@ -493,13 +493,27 @@ function bloqueCoincideConTurnoParte(bloque, turnoGrupoStr) {
   return true;
 }
 
-function obtenerBloquesDelDiaYTurno(fechaDDMMYYYY, turnoGrupoStr) {
+function bloqueTieneHorarioYProfesor(b) {
+  if (!b) return false;
+  const vacios = ["", "-", "—", "S/D", "SIN CARGAR", "SIN PROFESOR", "VACANTE", "A CONFIRMAR"];
+  const mat = String(b.materia || "").trim().toUpperCase();
+  const hor = String(b.horario || "").trim().toUpperCase();
+  const prof = String(b.profesor || "").trim().toUpperCase();
+  if (vacios.includes(mat)) return false;
+  if (vacios.includes(hor)) return false;
+  if (vacios.includes(prof)) return false;
+  return true;
+}
+
+function obtenerBloquesDelDiaYTurno(fechaDDMMYYYY, turnoGrupoStr, soloConHorarioYProfe = false) {
   const diaSemana = obtenerDiaSemanaDesdeFechaDDMMYYYY(fechaDDMMYYYY);
   if (!diaSemana) return [];
   const bloques = (estado.horarioParte && estado.horarioParte.bloques) || [];
   return bloques.filter(b => {
     const diaB = String(b.dia || "").trim().toUpperCase();
-    return diaB === diaSemana && bloqueCoincideConTurnoParte(b, turnoGrupoStr);
+    if (diaB !== diaSemana || !bloqueCoincideConTurnoParte(b, turnoGrupoStr)) return false;
+    if (soloConHorarioYProfe && !bloqueTieneHorarioYProfesor(b)) return false;
+    return true;
   });
 }
 
@@ -514,9 +528,15 @@ function renderAsistenciaDocenteDia() {
     return;
   }
 
+  const turnoValFull = document.getElementById("asistTurnoGrupo")?.value || "";
+  if (turnoValFull === "SIN_CLASES|NONE") {
+    cont.innerHTML = "";
+    cont.style.display = "none";
+    return;
+  }
   const fechaStr = formatearFechaInput();
-  const turnoRaw = (document.getElementById("asistTurnoGrupo")?.value || "").split("|")[0].trim();
-  const bloquesHoy = obtenerBloquesDelDiaYTurno(fechaStr, turnoRaw);
+  const turnoRaw = turnoValFull.split("|")[0].trim();
+  const bloquesHoy = obtenerBloquesDelDiaYTurno(fechaStr, turnoRaw, true);
   const diaSem = obtenerDiaSemanaDesdeFechaDDMMYYYY(fechaStr);
 
   if (bloquesHoy.length === 0) {
@@ -780,6 +800,7 @@ function normalizarFechaDDMMYYYY(valor) {
 
 function alCambiarFechaOTurno() {
   sincronizarMesDesdeFecha();
+  actualizarOpcionesTurnoGrupo();
   cargarParteGuardadoSiExiste();
   renderListaAsistencia();
 }
@@ -904,6 +925,7 @@ function cargarParteDesdeFilaHistorial(indexHist) {
     sincronizarMesDesdeFecha();
   }
 
+  actualizarOpcionesTurnoGrupo(String(item.turnoGrupo || "").trim());
   const selTurno = document.getElementById("asistTurnoGrupo");
   const opcionMatch = [...selTurno.options].find(o => o.value.split("|")[0].trim() === String(item.turnoGrupo || "").trim());
   if (opcionMatch) selTurno.value = opcionMatch.value;
@@ -1089,38 +1111,80 @@ async function renumerarOrdenEstudiantesCurso(silencioso = false) {
   }
 }
 
-function actualizarOpcionesTurnoGrupo() {
+function actualizarOpcionesTurnoGrupo(turnoForzado = "") {
   const sel = document.getElementById("asistTurnoGrupo");
   if (!sel) return;
   const valorPrevio = sel.value;
   const gruposSet = new Set();
   (estado.estudiantes || []).forEach(e => { if (e.grupo) gruposSet.add(e.grupo.trim()); });
 
-  let opciones = [
-    { label: "TT - Teoría (Curso Completo)", value: "TT - Teoría|ALL" },
+  const todasOpciones = [
     { label: "TM - Teoría (Curso Completo)", value: "TM - Teoría|ALL" },
+    { label: "TT - Teoría (Curso Completo)", value: "TT - Teoría|ALL" },
+    { label: "TV - Teoría (Curso Completo)", value: "TV - Teoría|ALL" },
     { label: "Educación Física (Curso Completo)", value: "Educación Física|ALL" }
   ];
 
   gruposSet.forEach(g => {
-    opciones.push({ label: `TM Taller - Solo ${g}`, value: `TM Taller (${g})|${g}` });
-    opciones.push({ label: `TT Taller - Solo ${g}`, value: `TT Taller (${g})|${g}` });
-    opciones.push({ label: `TV Taller - Solo ${g}`, value: `TV Taller (${g})|${g}` });
+    todasOpciones.push({ label: `TM Taller - Solo ${g}`, value: `TM Taller (${g})|${g}` });
+    todasOpciones.push({ label: `TT Taller - Solo ${g}`, value: `TT Taller (${g})|${g}` });
+    todasOpciones.push({ label: `TV Taller - Solo ${g}`, value: `TV Taller (${g})|${g}` });
   });
 
+  const bloquesConfig = (estado.horarioParte && estado.horarioParte.bloques) || [];
+  const fechaStr = formatearFechaInput();
+  const diaSem = obtenerDiaSemanaDesdeFechaDDMMYYYY(fechaStr);
+
+  let opcionesFinales = todasOpciones;
+
+  if (bloquesConfig.length > 0 && fechaStr) {
+    opcionesFinales = todasOpciones.filter(o => {
+      const turnoBase = o.value.split("|")[0].trim();
+      return obtenerBloquesDelDiaYTurno(fechaStr, turnoBase, true).length > 0;
+    });
+
+    if (turnoForzado) {
+      const yaEsta = opcionesFinales.some(o => o.value.split("|")[0].trim() === turnoForzado);
+      if (!yaEsta) {
+        const matchOrig = todasOpciones.find(o => o.value.split("|")[0].trim() === turnoForzado);
+        if (matchOrig) {
+          opcionesFinales.push({ label: `${matchOrig.label} (Histórico)`, value: matchOrig.value });
+        } else {
+          opcionesFinales.push({ label: `${turnoForzado} (Histórico)`, value: `${turnoForzado}|ALL` });
+        }
+      }
+    }
+  }
+
   sel.innerHTML = "";
-  opciones.forEach(o => {
+
+  if (opcionesFinales.length === 0) {
+    const optVacio = document.createElement("option");
+    optVacio.value = "SIN_CLASES|NONE";
+    optVacio.textContent = `Sin clases programadas (${diaSem || "este día"})`;
+    sel.appendChild(optVacio);
+    sel.value = "SIN_CLASES|NONE";
+    return;
+  }
+
+  opcionesFinales.forEach(o => {
     const opt = document.createElement("option");
     opt.value = o.value;
     opt.textContent = o.label;
     sel.appendChild(opt);
   });
-  if ([...sel.options].some(o => o.value === valorPrevio)) sel.value = valorPrevio;
+
+  if ([...sel.options].some(o => o.value === valorPrevio)) {
+    sel.value = valorPrevio;
+  } else {
+    sel.selectedIndex = 0;
+  }
 }
 
 function obtenerEstudiantesFiltradosAsistencia() {
   const filtroVal = document.getElementById("asistTurnoGrupo")?.value || "TT - Teoría|ALL";
   const grupoFiltro = filtroVal.split("|")[1] || "ALL";
+  if (grupoFiltro === "NONE") return [];
 
   return (estado.estudiantes || []).filter(est => {
     if (esEstudianteTachado(est)) return false;
@@ -1162,8 +1226,23 @@ function renderListaAsistencia() {
   if (selMod) selMod.disabled = (estadoDia !== "NORMAL");
 
   let p = 0, a = 0, j = 0, t = 0;
+  const turnoSelVal = document.getElementById("asistTurnoGrupo")?.value || "";
+  const sinClasesHoy = turnoSelVal === "SIN_CLASES|NONE";
+  const btnGuardarAsist = document.getElementById("btnSoloGuardarAsistencia");
+  if (btnGuardarAsist && btnGuardarAsist.textContent.indexOf("Guardando") === -1) {
+    btnGuardarAsist.disabled = sinClasesHoy;
+  }
 
-  if (estadoDia !== "NORMAL") {
+  if (sinClasesHoy) {
+    const diaSem = obtenerDiaSemanaDesdeFechaDDMMYYYY(formatearFechaInput()) || "este día";
+    cont.innerHTML = `
+      <div class="no-activity-card">
+        <strong>📅 ${diaSem} — Sin turnos con clases programadas</strong>
+        <p>No hay bloques con horario y docente asignado en <b>Horarios Parte</b> para este día.<br>
+        <button type="button" class="btn-outline" style="margin-top:8px;" onclick="abrirModalConfigHorario()">🗓️ Configurar Horarios Parte</button></p>
+      </div>
+    `;
+  } else if (estadoDia !== "NORMAL") {
     const etiquetaMotivo = obtenerEtiquetaMotivoDia(estadoDia);
     cont.innerHTML = `
       <div class="no-activity-card">
@@ -1961,6 +2040,9 @@ async function enviarInformeAlumnoImagenWhatsApp() {
 
 async function guardarAsistenciaEnSheets(abrirWspDespues = false) {
   const btn = document.getElementById("btnSoloGuardarAsistencia");
+  if ((document.getElementById("asistTurnoGrupo")?.value || "") === "SIN_CLASES|NONE") {
+    return mostrarToast("No hay clases programadas para este día");
+  }
   const lista = obtenerEstudiantesFiltradosAsistencia();
   if (lista.length === 0) return mostrarToast("No hay alumnos activos");
 
