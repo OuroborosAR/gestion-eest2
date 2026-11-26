@@ -182,10 +182,10 @@ function sincronizarSelectoresAppWA() {
   if (btnGuardar && !btnGuardar.disabled) btnGuardar.textContent = "💾 Guardar Asistencia";
 
   const btnSoloAbrir = document.getElementById("btnSoloAbrirWA");
-  if (btnSoloAbrir) btnSoloAbrir.textContent = `📲 Enviar por ${nombreApp}`;
+  if (btnSoloAbrir) btnSoloAbrir.textContent = `💬 Enviar texto por ${nombreApp}`;
 
   const btnEnvAlu = document.getElementById("btnEnviarWAAlumno");
-  if (btnEnvAlu) btnEnvAlu.textContent = `📲 Enviar por ${nombreApp}`;
+  if (btnEnvAlu) btnEnvAlu.textContent = `💬 Enviar texto por ${nombreApp}`;
 }
 
 function ocultarPantallaCargaInicial() {

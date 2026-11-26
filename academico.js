@@ -1195,7 +1195,11 @@ function renderListaAsistencia() {
             <div class="stu-meta">
               <span class="badge badge-grp">${est.grupo || "Sin grupo"}</span>
               <span class="badge ${claseBadgeFaltas}">${textoAlerta}</span>
-              ${totalAnual >= 10 ? `<button type="button" class="btn-outline" style="padding:1px 6px; font-size:10px;" onclick="prepararActaDesdeAlumno(${est.filaHoja}, 'INASISTENCIAS')">📄 Labrar Acta</button>` : ""}
+            </div>
+            <div class="stu-actions-inline">
+              ${totalAnual >= 10 ? `<button type="button" class="btn-outline btn-stu-mini" onclick="prepararActaDesdeAlumno(${est.filaHoja}, 'INASISTENCIAS')">📄 Acta</button>` : ""}
+              <button type="button" class="btn-outline btn-stu-mini" title="Editar N° de Orden, Nombre o Grupo" onclick="editarDatosEstudiante(${est.filaHoja})">✏️ Editar</button>
+              <button type="button" class="btn-outline btn-stu-mini" title="Tachar en lista" onclick="alternarEstadoTachado(${est.filaHoja})">🚫</button>
             </div>
           </div>
           <div class="pat-btn-group">
@@ -1203,8 +1207,6 @@ function renderListaAsistencia() {
             <button type="button" class="pat-btn ${estadoAlu === 'A' ? 'active-A' : ''}" title="Ausente (+${valAus})" onclick="cambiarEstadoAsistencia(${est.filaHoja}, 'A')">A<small>+${valAus}</small></button>
             <button type="button" class="pat-btn ${estadoAlu === 'J' ? 'active-J' : ''}" title="Ausente Justificado (No computa falta)" onclick="cambiarEstadoAsistencia(${est.filaHoja}, 'J')">J<small>0</small></button>
             <button type="button" class="pat-btn ${estadoAlu === 'T' ? 'active-T' : ''}" title="Tarde (+0.25)" onclick="cambiarEstadoAsistencia(${est.filaHoja}, 'T')">T<small>+0.25</small></button>
-            <button type="button" class="btn-strike-mini" title="Editar N° de Orden, Nombre o Grupo" onclick="editarDatosEstudiante(${est.filaHoja})">✏️</button>
-            <button type="button" class="btn-strike-mini" title="Tachar en lista" onclick="alternarEstadoTachado(${est.filaHoja})">🚫</button>
           </div>
         </div>
       `;
@@ -1367,6 +1369,596 @@ async function copiarPartePortapapeles() {
   }
 }
 
+function obtenerColoresCeldaCanvas(valor) {
+  const v = String(valor === undefined || valor === null ? "" : valor).trim().toUpperCase();
+  if (!v || v === "-") return { bg: "#ffffff", fg: "#64748b", bold: false };
+  if (v === "TEA") return { bg: "#dbeafe", fg: "#1d4ed8", bold: true };
+  if (v === "TEP") return { bg: "#dcfce7", fg: "#15803d", bold: true };
+  if (v === "TED" || v === "AUS") return { bg: "#fee2e2", fg: "#dc2626", bold: true };
+  if (v === "CI") return { bg: "#fef3c7", fg: "#b45309", bold: true };
+  const num = parseFloat(v.replace(",", "."));
+  if (!isNaN(num)) {
+    if (num >= 1 && num <= 3) return { bg: "#fee2e2", fg: "#dc2626", bold: true };
+    if (num >= 4 && num < 7) return { bg: "#dcfce7", fg: "#15803d", bold: true };
+    if (num >= 7 && num <= 10) return { bg: "#dbeafe", fg: "#1d4ed8", bold: true };
+  }
+  return { bg: "#ffffff", fg: "#0f172a", bold: true };
+}
+
+function envolverTextoCanvas(ctx, texto, maxWidth) {
+  const palabras = String(texto || "").split(/\s+/).filter(Boolean);
+  if (palabras.length === 0) return [""];
+  const lineas = [];
+  let actual = palabras[0];
+  for (let i = 1; i < palabras.length; i++) {
+    const prueba = actual + " " + palabras[i];
+    if (ctx.measureText(prueba).width <= maxWidth) {
+      actual = prueba;
+    } else {
+      lineas.push(actual);
+      actual = palabras[i];
+    }
+  }
+  lineas.push(actual);
+  return lineas;
+}
+
+function truncarTextoCanvas(ctx, texto, maxWidth) {
+  const str = String(texto || "");
+  if (ctx.measureText(str).width <= maxWidth) return str;
+  let s = str;
+  while (s.length > 3 && ctx.measureText(s + "…").width > maxWidth) {
+    s = s.slice(0, -1);
+  }
+  return s + "…";
+}
+
+function canvasABlobPNG(canvas) {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob);
+      else reject(new Error("No se pudo generar la imagen PNG"));
+    }, "image/png");
+  });
+}
+
+async function compartirODescargarImagenPNG(blob, nombreArchivo, titulo, textoAcomp) {
+  const file = new File([blob], nombreArchivo, { type: "image/png" });
+
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try {
+      await navigator.share({
+        files: [file],
+        title: titulo,
+        text: textoAcomp || ""
+      });
+      return true;
+    } catch (err) {
+      if (err && err.name === "AbortError") return false;
+    }
+  }
+
+  let copiadoPortapapeles = false;
+  if (navigator.clipboard && window.ClipboardItem) {
+    try {
+      await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+      copiadoPortapapeles = true;
+    } catch (e) {}
+  }
+
+  const urlObj = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = urlObj;
+  a.download = nombreArchivo;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(urlObj), 4000);
+
+  mostrarToast(
+    copiadoPortapapeles
+      ? "🖼️ Imagen descargada y copiada (pegala con Ctrl+V en WhatsApp)"
+      : "🖼️ Imagen descargada. Adjuntala en WhatsApp.",
+    4200
+  );
+  return true;
+}
+
+async function generarImagenParteDiarioBlob() {
+  const lista = obtenerEstudiantesFiltradosAsistencia();
+  const fechaStr = formatearFechaInput();
+  const turnoRaw = (document.getElementById("asistTurnoGrupo")?.value || "").split("|")[0].trim();
+  const valAus = obtenerValorAusenciaActual();
+  const estadoDia = obtenerEstadoDiaActual();
+  const preceptor = document.getElementById("asistPreceptor")?.value.trim() || "Preceptoría";
+  const obs = document.getElementById("asistObs")?.value.trim() || "";
+  const cursoLimpio = (estado.cursoActual || "").replace(/_/g, " ");
+
+  const ausentes = [], justificados = [], tardes = [];
+  let presentesCount = 0;
+
+  if (estadoDia === "NORMAL") {
+    lista.forEach(est => {
+      const st = asistenciaActual[est.filaHoja] || "P";
+      if (st === "P") presentesCount++;
+      else if (st === "A") ausentes.push(formatearEstudianteParaWhatsApp(est));
+      else if (st === "J") justificados.push(formatearEstudianteParaWhatsApp(est));
+      else if (st === "T") tardes.push(formatearEstudianteParaWhatsApp(est));
+    });
+  }
+
+  const W = 820;
+  const PAD = 20;
+  const CW = W - PAD * 2;
+  const SCALE = 2;
+
+  const tmp = document.createElement("canvas");
+  const mctx = tmp.getContext("2d");
+
+  const calcularFilasChips = (items) => {
+    if (!items || items.length === 0) return 0;
+    const cols = 3;
+    return Math.ceil(items.length / cols);
+  };
+
+  let H = PAD;
+  H += 56; // header
+  H += 10;
+
+  if (estadoDia !== "NORMAL") {
+    H += 68;
+  } else {
+    H += 56; // KPI bar
+    H += 12;
+    if (ausentes.length > 0) H += 24 + calcularFilasChips(ausentes) * 30 + 10;
+    if (justificados.length > 0) H += 24 + calcularFilasChips(justificados) * 30 + 10;
+    if (ausentes.length === 0 && justificados.length === 0) H += 34;
+    if (tardes.length > 0) H += 24 + calcularFilasChips(tardes) * 30 + 10;
+    if (materiasSinProfesorActual.length > 0) {
+      mctx.font = "bold 12.5px Arial, sans-serif";
+      const lSin = envolverTextoCanvas(mctx, "Sin Profesor en: " + materiasSinProfesorActual.join(", "), CW - 20);
+      H += lSin.length * 18 + 16;
+    }
+  }
+
+  let lineasObs = [];
+  if (obs) {
+    mctx.font = "12.5px Arial, sans-serif";
+    lineasObs = envolverTextoCanvas(mctx, "Observaciones: " + obs, CW - 20);
+    H += lineasObs.length * 18 + 16;
+  }
+
+  H += 36; // footer
+  H += PAD;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = W * SCALE;
+  canvas.height = H * SCALE;
+  const ctx = canvas.getContext("2d");
+  ctx.scale(SCALE, SCALE);
+
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, W, H);
+
+  // Borde exterior limpio
+  ctx.strokeStyle = "#111827";
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(PAD - 8, PAD - 8, CW + 16, H - (PAD - 8) * 2);
+
+  let y = PAD;
+
+  // Encabezado institucional
+  ctx.fillStyle = "#1e3a8a";
+  ctx.fillRect(PAD, y, CW, 52);
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "bold 14.5px Arial, sans-serif";
+  ctx.fillText('E.E.S.T. N° 2 "PBRO. MANUEL DE SAN GINÉS" — SAN FERNANDO', PAD + 12, y + 21);
+  ctx.font = "bold 11.5px Arial, sans-serif";
+  ctx.fillStyle = "#bfdbfe";
+  ctx.fillText(`PARTE DIARIO DE ASISTENCIA  |  ${cursoLimpio} — ${turnoRaw}`, PAD + 12, y + 40);
+
+  ctx.textAlign = "right";
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "bold 13px Arial, sans-serif";
+  ctx.fillText(`Fecha: ${fechaStr}`, PAD + CW - 12, y + 21);
+  ctx.font = "11px Arial, sans-serif";
+  ctx.fillStyle = "#dbeafe";
+  ctx.fillText(estadoDia === "NORMAL" ? `Aus: ${valAus} | Justif: 0 | Tarde: 0.25` : "Sin cómputo de faltas", PAD + CW - 12, y + 40);
+  ctx.textAlign = "left";
+  y += 62;
+
+  if (estadoDia !== "NORMAL") {
+    const motivoTexto = obtenerEtiquetaMotivoDia(estadoDia).toUpperCase();
+    ctx.fillStyle = "#fffbeb";
+    ctx.fillRect(PAD, y, CW, 58);
+    ctx.strokeStyle = "#f59e0b";
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(PAD, y, CW, 58);
+    ctx.fillStyle = "#b45309";
+    ctx.font = "bold 15px Arial, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(`ESTADO DEL TURNO: ${motivoTexto}`, W / 2, y + 25);
+    ctx.font = "12px Arial, sans-serif";
+    ctx.fillStyle = "#78350f";
+    ctx.fillText("Sin dictado de clases en este turno. No se computan inasistencias (0.00).", W / 2, y + 45);
+    ctx.textAlign = "left";
+    y += 68;
+  } else {
+    // Barra KPI de 5 columnas
+    const kpis = [
+      { lbl: "EN LISTA", val: lista.length, bg: "#e2e8f0", fg: "#1e293b" },
+      { lbl: "PRESENTES (P)", val: presentesCount, bg: "#dcfce7", fg: "#15803d" },
+      { lbl: "AUSENTES (A)", val: ausentes.length, bg: "#fee2e2", fg: "#b91c1c" },
+      { lbl: "JUSTIF. (J)", val: justificados.length, bg: "#ede9fe", fg: "#6d28d9" },
+      { lbl: "TARDES (T)", val: tardes.length, bg: "#fef3c7", fg: "#b45309" }
+    ];
+    const gap = 8;
+    const kw = (CW - gap * 4) / 5;
+    kpis.forEach((k, idx) => {
+      const kx = PAD + idx * (kw + gap);
+      ctx.fillStyle = k.bg;
+      ctx.fillRect(kx, y, kw, 50);
+      ctx.strokeStyle = "#cbd5e1";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(kx, y, kw, 50);
+      ctx.fillStyle = k.fg;
+      ctx.textAlign = "center";
+      ctx.font = "bold 20px Arial, sans-serif";
+      ctx.fillText(String(k.val), kx + kw / 2, y + 27);
+      ctx.font = "bold 9.5px Arial, sans-serif";
+      ctx.fillText(k.lbl, kx + kw / 2, y + 43);
+    });
+    ctx.textAlign = "left";
+    y += 62;
+
+    const dibujarSeccionChips = (titulo, items, bg, border, fg) => {
+      if (!items || items.length === 0) return;
+      ctx.fillStyle = fg;
+      ctx.font = "bold 12px Arial, sans-serif";
+      ctx.fillText(titulo, PAD, y + 14);
+      y += 22;
+
+      const cols = 3;
+      const cgap = 8;
+      const chipW = (CW - cgap * (cols - 1)) / cols;
+      items.forEach((txt, i) => {
+        const col = i % cols;
+        const row = Math.floor(i / cols);
+        const cx = PAD + col * (chipW + cgap);
+        const cy = y + row * 30;
+        ctx.fillStyle = bg;
+        ctx.fillRect(cx, cy, chipW, 24);
+        ctx.strokeStyle = border;
+        ctx.lineWidth = 1;
+        ctx.strokeRect(cx, cy, chipW, 24);
+        ctx.fillStyle = fg;
+        ctx.font = "bold 11.5px Arial, sans-serif";
+        ctx.fillText(truncarTextoCanvas(ctx, txt, chipW - 14), cx + 8, cy + 16);
+      });
+      y += Math.ceil(items.length / cols) * 30 + 10;
+    };
+
+    if (ausentes.length > 0) {
+      dibujarSeccionChips(`AUSENTES (+${valAus}) — Identificados por N° de Orden:`, ausentes, "#fff1f2", "#fca5a5", "#991b1b");
+    }
+    if (justificados.length > 0) {
+      dibujarSeccionChips("AUSENTES JUSTIFICADOS (0 — No computa):", justificados, "#f5f3ff", "#c4b5fd", "#6d28d9");
+    }
+    if (ausentes.length === 0 && justificados.length === 0) {
+      ctx.fillStyle = "#f0fdf4";
+      ctx.fillRect(PAD, y, CW, 26);
+      ctx.strokeStyle = "#86efac";
+      ctx.strokeRect(PAD, y, CW, 26);
+      ctx.fillStyle = "#15803d";
+      ctx.font = "bold 12px Arial, sans-serif";
+      ctx.fillText("Sin ausentes registrados en este turno.", PAD + 10, y + 17);
+      y += 34;
+    }
+    if (tardes.length > 0) {
+      dibujarSeccionChips("LLEGADAS TARDE (+0.25):", tardes, "#fffbeb", "#fcd34d", "#b45309");
+    }
+    if (materiasSinProfesorActual.length > 0) {
+      ctx.font = "bold 12px Arial, sans-serif";
+      const lSin = envolverTextoCanvas(ctx, "Sin Profesor en: " + materiasSinProfesorActual.join(", "), CW - 20);
+      const bh = lSin.length * 18 + 10;
+      ctx.fillStyle = "#fef2f2";
+      ctx.fillRect(PAD, y, CW, bh);
+      ctx.strokeStyle = "#fca5a5";
+      ctx.strokeRect(PAD, y, CW, bh);
+      ctx.fillStyle = "#b91c1c";
+      lSin.forEach((ln, idx) => ctx.fillText(ln, PAD + 10, y + 17 + idx * 18));
+      y += bh + 8;
+    }
+  }
+
+  if (lineasObs.length > 0) {
+    const bh = lineasObs.length * 18 + 10;
+    ctx.fillStyle = "#f8fafc";
+    ctx.fillRect(PAD, y, CW, bh);
+    ctx.strokeStyle = "#cbd5e1";
+    ctx.strokeRect(PAD, y, CW, bh);
+    ctx.fillStyle = "#1e293b";
+    ctx.font = "12px Arial, sans-serif";
+    lineasObs.forEach((ln, idx) => ctx.fillText(ln, PAD + 10, y + 17 + idx * 18));
+    y += bh + 8;
+  }
+
+  // Pie de parte
+  ctx.strokeStyle = "#cbd5e1";
+  ctx.beginPath();
+  ctx.moveTo(PAD, y + 4);
+  ctx.lineTo(PAD + CW, y + 4);
+  ctx.stroke();
+
+  ctx.fillStyle = "#334155";
+  ctx.font = "bold 11.5px Arial, sans-serif";
+  ctx.fillText(`Preceptor/a: ${preceptor}`, PAD, y + 22);
+  ctx.textAlign = "right";
+  ctx.font = "10.5px Arial, sans-serif";
+  ctx.fillStyle = "#64748b";
+  ctx.fillText("E.E.S.T. N° 2 San Fernando — Parte Diario Digital", PAD + CW, y + 22);
+  ctx.textAlign = "left";
+
+  return canvasABlobPNG(canvas);
+}
+
+async function enviarParteImagenWhatsApp() {
+  try {
+    mostrarToast("⏳ Generando imagen del parte...", 3000);
+    const blob = await generarImagenParteDiarioBlob();
+    const fechaSlug = (formatearFechaInput() || "parte").replace(/\//g, "-");
+    const cursoSlug = (estado.cursoActual || "curso").replace(/\s+/g, "_");
+    const nombreArchivo = `Parte_${cursoSlug}_${fechaSlug}.png`;
+    const titulo = `Parte Diario ${cursoSlug.replace(/_/g, " ")} (${formatearFechaInput()})`;
+    await compartirODescargarImagenPNG(blob, nombreArchivo, titulo, titulo);
+  } catch (err) {
+    mostrarToast("⚠️ Error al generar imagen: " + err.message, 4000);
+  }
+}
+
+async function generarImagenInformeAlumnoBlob(est) {
+  const hoy = new Date();
+  const fechaHoy = `${String(hoy.getDate()).padStart(2, "0")}/${String(hoy.getMonth() + 1).padStart(2, "0")}/${hoy.getFullYear()}`;
+  const cursoLimpio = (estado.cursoActual || "").replace(/_/g, " ");
+  const preceptor = document.getElementById("asistPreceptor")?.value.trim() || "Preceptoría";
+  const totFaltas = (est.inasistencias && est.inasistencias.total) || 0;
+  const resumenMeses = obtenerResumenMensualAbreviado(est) || "Sin inasistencias";
+  const fechasHist = obtenerFechasInasistenciasEstudiante(est);
+  const fechasTeoFinal = combinarFechasDetectadasYExtra(fechasHist.teoria, configInformeAlumno.fechasExtraTeo);
+  const fechasTalFinal = combinarFechasDetectadasYExtra(fechasHist.taller, configInformeAlumno.fechasExtraTal);
+  const etiquetaAmbito = configInformeAlumno.ambito === "TALLER" ? "SOLO TALLER" : (configInformeAlumno.ambito === "TEORIA" ? "SOLO TEORÍA" : "TEORÍA + TALLER");
+  const materiasFiltradas = obtenerMateriasOrdenadasVisualmente().filter(m => materiaCumpleFiltroInforme(m));
+  const pendActivas = obtenerPendientesDeEstudiante(est).filter(p => p.estado !== "ACREDITADA");
+  const notaOpc = (configInformeAlumno.notaAdicional || "").trim();
+
+  const W = 940;
+  const PAD = 18;
+  const CW = W - PAD * 2;
+  const SCALE = 2;
+
+  const tmp = document.createElement("canvas");
+  const mctx = tmp.getContext("2d");
+  mctx.font = "11.5px Arial, sans-serif";
+
+  const infoLines = [];
+  infoLines.push(...envolverTextoCanvas(mctx, `Inasistencias por mes: ${resumenMeses}`, CW - 16));
+  if (configInformeAlumno.ambito === "TODO" || configInformeAlumno.ambito === "TEORIA") {
+    infoLines.push(...envolverTextoCanvas(mctx, `Días Aus./Tarde (Teoría): ${fechasTeoFinal.length > 0 ? fechasTeoFinal.join(", ") : "Ninguno"}`, CW - 16));
+  }
+  if (configInformeAlumno.ambito === "TODO" || configInformeAlumno.ambito === "TALLER") {
+    infoLines.push(...envolverTextoCanvas(mctx, `Días Aus./Tarde (Taller): ${fechasTalFinal.length > 0 ? fechasTalFinal.join(", ") : "Ninguno"}`, CW - 16));
+  }
+  if (pendActivas.length > 0) {
+    const txtP = pendActivas.map(p => `${p.materia} (${p.anioOrigen || "Ant."})`).join(" | ");
+    infoLines.push(...envolverTextoCanvas(mctx, `Pendientes Años Ant. (${pendActivas.length}/${TOPE_MATERIAS_PENDIENTES}): ${txtP}`, CW - 16));
+  }
+
+  let notaLines = [];
+  if (notaOpc) {
+    notaLines = envolverTextoCanvas(mctx, `Nota: ${notaOpc}`, CW - 16);
+  }
+
+  const infoBoxH = infoLines.length * 16 + 12;
+  const ROW_H = 24;
+  const HDR_H = 24;
+  const tableH = HDR_H + Math.max(1, materiasFiltradas.length) * ROW_H;
+  const notaBoxH = notaLines.length > 0 ? (notaLines.length * 16 + 12 + 8) : 0;
+
+  const H = PAD + 44 + 8 + 30 + 8 + infoBoxH + 8 + tableH + 8 + notaBoxH + 28 + PAD;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = W * SCALE;
+  canvas.height = H * SCALE;
+  const ctx = canvas.getContext("2d");
+  ctx.scale(SCALE, SCALE);
+
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, W, H);
+
+  // Marco exterior ajustado al contenido
+  ctx.strokeStyle = "#111827";
+  ctx.lineWidth = 1.6;
+  ctx.strokeRect(PAD - 8, PAD - 8, CW + 16, H - (PAD - 8) * 2);
+
+  let y = PAD;
+
+  // Encabezado
+  ctx.fillStyle = "#0f172a";
+  ctx.font = "bold 14.5px Arial, sans-serif";
+  ctx.fillText('E.E.S.T. N° 2 "PBRO. MANUEL DE SAN GINÉS" — SAN FERNANDO', PAD, y + 16);
+  ctx.fillStyle = "#334155";
+  ctx.font = "bold 11px Arial, sans-serif";
+  ctx.fillText(`COMUNICADO ACADÉMICO Y DE ASISTENCIA (${etiquetaAmbito})`, PAD, y + 33);
+
+  ctx.textAlign = "right";
+  ctx.fillStyle = "#0f172a";
+  ctx.font = "bold 11.5px Arial, sans-serif";
+  ctx.fillText(`Fecha: ${fechaHoy}`, PAD + CW, y + 16);
+  ctx.fillText(`Curso: ${cursoLimpio}`, PAD + CW, y + 33);
+  ctx.textAlign = "left";
+
+  ctx.strokeStyle = "#111827";
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(PAD, y + 41);
+  ctx.lineTo(PAD + CW, y + 41);
+  ctx.stroke();
+  y += 50;
+
+  // Franja del estudiante
+  ctx.fillStyle = "#f0f4f8";
+  ctx.fillRect(PAD, y, CW, 28);
+  ctx.strokeStyle = "#111827";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(PAD, y, CW, 28);
+
+  ctx.fillStyle = "#0f172a";
+  ctx.font = "bold 12px Arial, sans-serif";
+  ctx.fillText(`ESTUDIANTE: ${est.orden}. ${est.nombre}`, PAD + 8, y + 18);
+  ctx.font = "bold 11.5px Arial, sans-serif";
+  ctx.fillText(`DNI: ${est.dni || "-"}`, PAD + 440, y + 18);
+  ctx.fillText(`GRUPO: ${est.grupo || "-"}`, PAD + 590, y + 18);
+  ctx.textAlign = "right";
+  ctx.fillStyle = totFaltas >= 20 ? "#b91c1c" : "#0f172a";
+  ctx.fillText(`TOTAL INASISTENCIAS: ${totFaltas}`, PAD + CW - 8, y + 18);
+  ctx.textAlign = "left";
+  y += 36;
+
+  // Caja de inasistencias y fechas
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(PAD, y, CW, infoBoxH);
+  ctx.strokeStyle = "#111827";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(PAD, y, CW, infoBoxH);
+
+  ctx.fillStyle = "#111827";
+  ctx.font = "11.5px Arial, sans-serif";
+  infoLines.forEach((ln, idx) => {
+    ctx.fillText(ln, PAD + 8, y + 16 + idx * 16);
+  });
+  y += infoBoxH + 8;
+
+  // Tabla de calificaciones
+  const cols = [
+    { label: "MATERIA", w: 280, align: "left", key: "_mat" },
+    { label: "ÁREA", w: 72, align: "center", key: "_area" },
+    { label: "1° Val.", w: 69, align: "center", key: "val1" },
+    { label: "1°C", w: 69, align: "center", key: "cal1" },
+    { label: "2° Val.", w: 69, align: "center", key: "val2" },
+    { label: "2°C", w: 69, align: "center", key: "cal2" },
+    { label: "Int. 1°C", w: 69, align: "center", key: "int1" },
+    { label: "Dic.", w: 69, align: "center", key: "intDic" },
+    { label: "Feb.", w: 69, align: "center", key: "intFeb" },
+    { label: "Final", w: 69, align: "center", key: "final" }
+  ];
+
+  // Encabezado tabla
+  let cx = PAD;
+  cols.forEach(c => {
+    ctx.fillStyle = "#e2e8f0";
+    ctx.fillRect(cx, y, c.w, HDR_H);
+    ctx.strokeStyle = "#111827";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(cx, y, c.w, HDR_H);
+    ctx.fillStyle = "#0f172a";
+    ctx.font = "bold 11px Arial, sans-serif";
+    if (c.align === "left") {
+      ctx.fillText(c.label, cx + 6, y + 16);
+    } else {
+      ctx.textAlign = "center";
+      ctx.fillText(c.label, cx + c.w / 2, y + 16);
+      ctx.textAlign = "left";
+    }
+    cx += c.w;
+  });
+  y += HDR_H;
+
+  // Filas de materias
+  materiasFiltradas.forEach(mat => {
+    const esTal = esMateriaDeTaller(mat);
+    const notasMat = (est.notas && est.notas[mat.indice]) || {};
+    cx = PAD;
+
+    cols.forEach(c => {
+      let texto = "-";
+      let estilo = { bg: "#ffffff", fg: "#0f172a", bold: false };
+
+      if (c.key === "_mat") {
+        texto = limpiarNombreMateria(mat.nombre);
+        estilo = { bg: "#ffffff", fg: "#0f172a", bold: true };
+      } else if (c.key === "_area") {
+        texto = esTal ? "Taller" : "Teoría";
+        estilo = { bg: esTal ? "#eff6ff" : "#ffffff", fg: esTal ? "#0d47a1" : "#1e293b", bold: true };
+      } else {
+        const val = String(notasMat[c.key] || "").trim();
+        texto = val || "-";
+        estilo = obtenerColoresCeldaCanvas(val);
+      }
+
+      ctx.fillStyle = estilo.bg;
+      ctx.fillRect(cx, y, c.w, ROW_H);
+      ctx.strokeStyle = "#111827";
+      ctx.lineWidth = 0.8;
+      ctx.strokeRect(cx, y, c.w, ROW_H);
+
+      ctx.fillStyle = estilo.fg;
+      ctx.font = `${estilo.bold ? "bold " : ""}11px Arial, sans-serif`;
+      if (c.align === "left") {
+        ctx.fillText(truncarTextoCanvas(ctx, texto, c.w - 10), cx + 6, y + 16);
+      } else {
+        ctx.textAlign = "center";
+        ctx.fillText(texto, cx + c.w / 2, y + 16);
+        ctx.textAlign = "left";
+      }
+      cx += c.w;
+    });
+    y += ROW_H;
+  });
+
+  y += 8;
+
+  if (notaLines.length > 0) {
+    const bh = notaLines.length * 16 + 12;
+    ctx.fillStyle = "#fffbeb";
+    ctx.fillRect(PAD, y, CW, bh);
+    ctx.strokeStyle = "#f59e0b";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(PAD, y, CW, bh);
+    ctx.fillStyle = "#78350f";
+    ctx.font = "bold 11.5px Arial, sans-serif";
+    notaLines.forEach((ln, idx) => ctx.fillText(ln, PAD + 8, y + 16 + idx * 16));
+    y += bh + 8;
+  }
+
+  // Pie de informe
+  ctx.fillStyle = "#334155";
+  ctx.font = "bold 11px Arial, sans-serif";
+  ctx.fillText(`Preceptor/a: ${preceptor}`, PAD, y + 16);
+  ctx.textAlign = "right";
+  ctx.font = "italic 11px Arial, sans-serif";
+  ctx.fillStyle = "#475569";
+  ctx.fillText("Se solicita confirmar recepción del informe. Muchas gracias.", PAD + CW, y + 16);
+  ctx.textAlign = "left";
+
+  return canvasABlobPNG(canvas);
+}
+
+async function enviarInformeAlumnoImagenWhatsApp() {
+  const filaSel = parseInt(document.getElementById("alumnoSelect")?.value || "0", 10);
+  const est = (estado.estudiantes || []).find(e => e.filaHoja === filaSel) || (estado.estudiantes || [])[0];
+  if (!est) return;
+  try {
+    mostrarToast("⏳ Generando imagen del informe...", 3000);
+    const blob = await generarImagenInformeAlumnoBlob(est);
+    const nomSlug = String(est.nombre || "estudiante").replace(/[^A-Za-z0-9]+/g, "_").slice(0, 28);
+    const nombreArchivo = `Informe_${est.orden}_${nomSlug}.png`;
+    const titulo = `Informe Académico — ${est.nombre}`;
+    await compartirODescargarImagenPNG(blob, nombreArchivo, titulo, `E.E.S.T. N° 2 — Informe de ${est.nombre}`);
+  } catch (err) {
+    mostrarToast("⚠️ Error al generar imagen: " + err.message, 4000);
+  }
+}
+
 async function guardarAsistenciaEnSheets(abrirWspDespues = false) {
   const btn = document.getElementById("btnSoloGuardarAsistencia");
   const lista = obtenerEstudiantesFiltradosAsistencia();
@@ -1482,26 +2074,75 @@ function renderHistorialAsistencias() {
     return;
   }
 
-  let html = `<table class="app-table"><thead><tr><th>Acción</th><th>Fecha</th><th>Turno</th><th>P</th><th>A / J</th><th>T</th><th>Detalle Ausentes / Estado / Profes</th></tr></thead><tbody>`;
+  let html = `<div class="hist-cards-list">`;
+  let visibles = 0;
+
   hist.forEach((item, idx) => {
     if (valorActual !== "ALL" && item.turnoGrupo !== valorActual) return;
+    visibles++;
+
     const esSinActividad = (item.estadoDia && item.estadoDia !== "NORMAL") || String(item.nominaAusentes || "").indexOf("[SIN ACTIVIDAD") === 0;
-    const estiloDetalle = esSinActividad ? "color:#b45309; font-weight:800; font-size:11px;" : "font-size:11px;";
-    const txtSinProf = (item.materiasSinProfesor && item.materiasSinProfesor.length > 0)
-      ? `<br><span style="color:#dc2626; font-weight:700;">🚫 Sin Prof: ${item.materiasSinProfesor.join(", ")}</span>`
+    const fechaTxt = normalizarFechaDDMMYYYY(item.fecha);
+    const sinProfArr = Array.isArray(item.materiasSinProfesor) ? item.materiasSinProfesor : [];
+    const htmlSinProf = sinProfArr.length > 0
+      ? `<div class="hist-sin-prof">🚫 Sin Prof: ${sinProfArr.join(", ")}</div>`
       : "";
-    html += `<tr>
-      <td><button type="button" class="btn-outline" style="padding:3px 6px; font-size:11px;" onclick="cargarParteDesdeFilaHistorial(${idx})">✏️</button></td>
-      <td><strong>${normalizarFechaDDMMYYYY(item.fecha)}</strong></td>
-      <td><span class="badge badge-grp">${item.turnoGrupo}</span></td>
-      <td style="color:#15803d;font-weight:800;">${item.presentes}</td>
-      <td style="color:#b91c1c;font-weight:800;">${item.ausentes}</td>
-      <td style="color:#b45309;font-weight:800;">${item.tardes}</td>
-      <td class="td-left" style="${estiloDetalle}">${item.nominaAusentes}${txtSinProf}</td>
-    </tr>`;
+
+    let detalleHTML = "";
+    if (esSinActividad) {
+      const txtMot = String(item.nominaAusentes || "").replace(/^\[SIN ACTIVIDAD:\s*/i, "").replace(/\]$/, "").trim();
+      detalleHTML = `<div class="hist-sin-act">📌 ${txtMot || obtenerEtiquetaMotivoDia(item.estadoDia)}</div>`;
+    } else {
+      const rawAus = String(item.nominaAusentes || "").trim();
+      const sinAusentes = !rawAus || rawAus.toLowerCase().indexOf("sin ausentes") === 0;
+      if (sinAusentes) {
+        detalleHTML = `<div class="hist-ok-line">✅ Sin ausentes</div>`;
+      } else {
+        const listaAus = rawAus.split("|").map(s => s.trim()).filter(Boolean);
+        const chipsAus = listaAus.map(nom => {
+          const esJ = nom.indexOf("[J]") !== -1;
+          return `<span class="hist-aus-chip ${esJ ? 'chip-just' : ''}">${nom}</span>`;
+        }).join("");
+
+        if (listaAus.length <= 2) {
+          detalleHTML = `<div class="hist-chips-wrap">${chipsAus}</div>`;
+        } else {
+          detalleHTML = `
+            <details class="hist-details">
+              <summary>Ver nómina de ausentes (${listaAus.length})</summary>
+              <div class="hist-chips-wrap" style="margin-top:6px;">${chipsAus}</div>
+            </details>
+          `;
+        }
+      }
+    }
+
+    html += `
+      <div class="hist-card ${esSinActividad ? 'hist-card-sin-act' : ''}">
+        <div class="hist-card-top">
+          <div class="hist-card-meta">
+            <strong class="hist-date">${fechaTxt}</strong>
+            <span class="badge badge-grp">${item.turnoGrupo}</span>
+          </div>
+          <div class="hist-card-right">
+            <div class="hist-pills">
+              <span class="hist-pill pill-p" title="Presentes">P:${item.presentes}</span>
+              <span class="hist-pill pill-a" title="Ausentes / Justif.">A:${item.ausentes}</span>
+              <span class="hist-pill pill-t" title="Tardes">T:${item.tardes}</span>
+            </div>
+            <button type="button" class="btn-outline hist-load-btn" onclick="cargarParteDesdeFilaHistorial(${idx})">✏️ Cargar</button>
+          </div>
+        </div>
+        <div class="hist-card-body">
+          ${detalleHTML}
+          ${htmlSinProf}
+        </div>
+      </div>
+    `;
   });
-  html += `</tbody></table>`;
-  cont.innerHTML = html;
+
+  html += `</div>`;
+  cont.innerHTML = visibles > 0 ? html : `<p style="padding:10px; color:#64748b;">Sin partes para el filtro seleccionado.</p>`;
 }
 
 function limpiarNombreMateria(nombreRaw) {
@@ -1904,17 +2545,24 @@ function imprimirComunicadoAlumnoActual() {
   const filaSel = parseInt(document.getElementById("alumnoSelect")?.value || "0", 10);
   const est = (estado.estudiantes || []).find(e => e.filaHoja === filaSel);
   if (!est) return;
-  document.getElementById("printComunicadosRoot").innerHTML = construirTalonComunicadoHTML(est);
+  const root = document.getElementById("printComunicadosRoot");
+  root.classList.add("comunicado-single");
+  root.innerHTML = construirTalonComunicadoHTML(est);
   document.body.classList.remove("print-mode-acta");
   document.body.classList.add("print-mode-comunicado");
   window.print();
-  setTimeout(() => document.body.classList.remove("print-mode-comunicado"), 600);
+  setTimeout(() => {
+    document.body.classList.remove("print-mode-comunicado");
+    root.classList.remove("comunicado-single");
+  }, 600);
 }
 
 function imprimirComunicadosCursoCompleto() {
   const activos = (estado.estudiantes || []).filter(e => !esEstudianteTachado(e));
   if (activos.length === 0) return mostrarToast("No hay alumnos activos");
-  document.getElementById("printComunicadosRoot").innerHTML = activos.map(est => construirTalonComunicadoHTML(est)).join("");
+  const root = document.getElementById("printComunicadosRoot");
+  root.classList.remove("comunicado-single");
+  root.innerHTML = activos.map(est => construirTalonComunicadoHTML(est)).join("");
   document.body.classList.remove("print-mode-acta");
   document.body.classList.add("print-mode-comunicado");
   window.print();
@@ -2733,12 +3381,13 @@ function renderVistaAlumno() {
         </div>
         <div class="action-buttons" style="margin-top:10px;">
           <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:8px;">
-            <button type="button" id="btnEnviarWAAlumno" class="btn-main btn-w4b" onclick="enviarInformeAlumnoWhatsApp()">📲 Enviar por ${nombreApp}</button>
-            <button type="button" class="btn-main btn-print-blue" onclick="imprimirComunicadoAlumnoActual()">🖨️ Imprimir Talón Cuaderno</button>
+            <button type="button" class="btn-main btn-w4b" onclick="enviarInformeAlumnoImagenWhatsApp()">🖼️ Enviar Imagen por WhatsApp</button>
+            <button type="button" class="btn-main btn-print-blue" onclick="imprimirComunicadoAlumnoActual()">🖨️ Imprimir / PDF</button>
           </div>
           <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <button type="button" id="btnEnviarWAAlumno" class="btn-outline" style="flex:1;" onclick="enviarInformeAlumnoWhatsApp()">💬 Enviar texto por ${nombreApp}</button>
             <button type="button" class="btn-outline" style="flex:1;" onclick="copiarInformeAlumnoPortapapeles()">📋 Copiar Texto</button>
-            <button type="button" class="btn-outline" style="flex:1;" onclick="imprimirComunicadosCursoCompleto()">🖨️ Imprimir Lote Todo el Curso</button>
+            <button type="button" class="btn-outline" style="flex:1;" onclick="imprimirComunicadosCursoCompleto()">🖨️ Lote Todo el Curso</button>
           </div>
         </div>
         <div class="wa-preview-box" id="waAlumnoPreviewBox">${construirMensajeWhatsAppAlumno(est)}</div>

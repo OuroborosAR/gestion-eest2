@@ -238,14 +238,19 @@
             <button class="btn-main btn-print-blue" id="btnSoloGuardarAsistencia" onclick="guardarAsistenciaEnSheets(false)">
               💾 Guardar Asistencia
             </button>
-            <button class="btn-main btn-w4b" id="btnSoloAbrirWA" onclick="abrirWhatsAppBusinessDirecto()">
-              📲 Enviar por WhatsApp
+            <button class="btn-main btn-w4b" id="btnEnviarParteImg" onclick="enviarParteImagenWhatsApp()">
+              🖼️ Enviar Imagen por WhatsApp
             </button>
           </div>
 
-          <button class="btn-outline" style="width:100%;" onclick="copiarPartePortapapeles()">
-            📋 Copiar texto del parte
-          </button>
+          <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <button class="btn-outline" id="btnSoloAbrirWA" style="flex:1;" onclick="abrirWhatsAppBusinessDirecto()">
+              💬 Enviar texto por WhatsApp
+            </button>
+            <button class="btn-outline" style="flex:1;" onclick="copiarPartePortapapeles()">
+              📋 Copiar texto del parte
+            </button>
+          </div>
         </div>
 
         <div class="wa-preview-box" id="waPreviewBox"></div>
