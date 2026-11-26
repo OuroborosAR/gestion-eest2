@@ -1,4 +1,3 @@
-// --- SILABEADOR EN ESPAÑOL PARA EL PARTE DIARIO ---
 function silabearPalabraEspanol(palabra) {
   if (!palabra || palabra.length < 6) return palabra;
   const m = palabra.match(/^([^A-Za-zÁÉÍÓÚÜÑáéíóúüñ]*)([A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+)([^A-Za-zÁÉÍÓÚÜÑáéíóúüñ]*)$/);
@@ -60,7 +59,6 @@ function silabearTextoEspanol(texto) {
     .join("");
 }
 
-// --- PARTE DIARIO DINÁMICO MENSUAL (5 SEMANAS EN 4 PÁGINAS / 2 HOJAS A4) ---
 const pdMonthNames = ["ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO", "JULIO", "AGOSTO", "SEPTIEMBRE", "OCTUBRE", "NOVIEMBRE", "DICIEMBRE"];
 
 function construirDatosParteDinamico() {

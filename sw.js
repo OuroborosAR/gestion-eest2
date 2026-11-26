@@ -1,4 +1,4 @@
-const CACHE_NAME = 'eest2-cache-v5';
+const CACHE_NAME = 'eest2-cache-v9';
 const ASSETS = [
   './',
   './index.html',
@@ -31,7 +31,6 @@ self.addEventListener('activate', (e) => {
 });
 
 self.addEventListener('fetch', (e) => {
-  // Las consultas a Google Apps Script siempre van directo a internet
   if (e.request.url.includes('script.google.com')) {
     return;
   }

@@ -1,6 +1,5 @@
 const DEFAULT_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbysbbhvPSA3iPtB_CPt7bFZSHiJW_CsjOks9wskHLwaae1mHc-lJMNA_4HOKJHJ8-BPvA/exec";
 
-// Escudo vectorial institucional E.E.S.T. N°2 de San Fernando (Si subís logo.png en la carpeta, usa logo.png)
 const ESCUDO_EEST2_SVG = "data:image/svg+xml;utf8," + encodeURIComponent(`
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 340">
     <path d="M40 25 L280 25 L292 50 C282 140 282 225 160 288 C38 225 38 140 28 50 Z" fill="#ffffff" stroke="#000000" stroke-width="11" stroke-linejoin="round"/>
@@ -50,26 +49,37 @@ let scriptUrl = localStorage.getItem("eest2_script_url") || DEFAULT_SCRIPT_URL;
 let primeraCargaApp = true;
 let deferredPrompt = null;
 
+// Limpiar cualquier contraseña guardada de versiones anteriores
+localStorage.removeItem("eest2_auth_pass");
+
+function escHtml(str) {
+  return String(str === undefined || str === null ? "" : str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 let sesionAuth = {
-  usuario: localStorage.getItem("eest2_auth_user") || "",
-  clave: localStorage.getItem("eest2_auth_pass") || ""
+  usuario: localStorage.getItem("eest2_auth_user") || sessionStorage.getItem("eest2_auth_user") || "",
+  token: sessionStorage.getItem("eest2_auth_token") || localStorage.getItem("eest2_auth_token") || ""
 };
 
 let preferenciaAppWA = localStorage.getItem("eest2_tipo_app_wa") || "W4B";
+let cicloSeleccionado = localStorage.getItem("eest2_ultimo_ciclo") || "";
 
 const nativeFetch = window.fetch.bind(window);
 window.fetch = async function(input, init) {
-  let url = typeof input === "string" ? input : input.url;
+  const url = typeof input === "string" ? input : input.url;
   if (url && url.indexOf("script.google.com") !== -1) {
-    if (!init || !init.method || init.method.toUpperCase() === "GET") {
-      const sep = url.indexOf("?") !== -1 ? "&" : "?";
-      url = `${url}${sep}usuario=${encodeURIComponent(sesionAuth.usuario)}&clave=${encodeURIComponent(sesionAuth.clave)}`;
-      input = url;
-    } else if (init && init.method && init.method.toUpperCase() === "POST" && init.body) {
+    if (init && init.method && init.method.toUpperCase() === "POST" && init.body) {
       try {
         const parsed = JSON.parse(init.body);
-        parsed.authUsuario = sesionAuth.usuario;
-        parsed.authClave = sesionAuth.clave;
+        if (parsed.accion !== "login") {
+          parsed.authToken = sesionAuth.token;
+        }
+        if (!parsed.ciclo && cicloSeleccionado) parsed.ciclo = cicloSeleccionado;
         init.body = JSON.stringify(parsed);
       } catch (e) {}
     }
@@ -78,6 +88,9 @@ window.fetch = async function(input, init) {
 };
 
 let estado = {
+  cicloActual: "",
+  estadoCicloActual: "ACTIVO",
+  ciclosLectivos: [],
   cursoActual: "",
   cursos: [],
   cursosTotales: [],
@@ -90,6 +103,7 @@ let estado = {
   horarioParte: null,
   notificacionesCurso: [],
   actasCurso: [],
+  pendientesCurso: [],
   esCicloBasico: false
 };
 
@@ -119,8 +133,10 @@ const SUB_CAMPOS = [
   { key: "cal1", label: "Calif. 1°C", shortLabel: "1°C", offset: 1, tipo: "cal" },
   { key: "val2", label: "2° Val. Prel.", shortLabel: "2°V", offset: 2, tipo: "val" },
   { key: "cal2", label: "Calif. 2°C", shortLabel: "2°C", offset: 3, tipo: "cal" },
-  { key: "int1", label: "Intensif.", shortLabel: "Int", offset: 4, tipo: "cal" },
-  { key: "final", label: "Calif. Final", shortLabel: "Fin", offset: 5, tipo: "cal" }
+  { key: "int1", label: "Intensif. 1°C", shortLabel: "Int1", offset: 4, tipo: "cal" },
+  { key: "intDic", label: "Intensif. Dic.", shortLabel: "Dic", offset: 5, tipo: "cal" },
+  { key: "intFeb", label: "Intensif. Feb.", shortLabel: "Feb", offset: 6, tipo: "cal" },
+  { key: "final", label: "Calif. Final", shortLabel: "Fin", offset: 7, tipo: "cal" }
 ];
 
 window.addEventListener("DOMContentLoaded", () => {
@@ -134,7 +150,7 @@ window.addEventListener("DOMContentLoaded", () => {
   sincronizarSelectoresAppWA();
 
   const ultimoCurso = localStorage.getItem("eest2_ultimo_curso") || "";
-  if (sesionAuth.usuario && sesionAuth.clave) {
+  if (sesionAuth.token) {
     cargarDatosDesdeSheet(ultimoCurso, true);
   } else {
     setTimeout(() => {
@@ -201,36 +217,122 @@ async function iniciarSesionSistema() {
 
   const btn = document.getElementById("btnSubmitLogin");
   btn.disabled = true;
-  btn.textContent = "⏳ Verificando credenciales...";
+  btn.textContent = "Verificando...";
 
-  sesionAuth.usuario = u;
-  sesionAuth.clave = c;
+  try {
+    const ultimoCurso = localStorage.getItem("eest2_ultimo_curso") || "";
+    const resp = await fetch(scriptUrl, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({
+        accion: "login",
+        authUsuario: u,
+        authClave: c,
+        curso: ultimoCurso,
+        ciclo: cicloSeleccionado || ""
+      })
+    });
+    const json = await resp.json();
+    if (!json.ok || !json.token) {
+      throw new Error(json.error || "Usuario o contraseña incorrectos.");
+    }
 
-  const ultimoCurso = localStorage.getItem("eest2_ultimo_curso") || "";
-  const ok = await cargarDatosDesdeSheet(ultimoCurso, true);
+    sesionAuth.usuario = u;
+    sesionAuth.token = json.token;
+    sessionStorage.setItem("eest2_auth_user", u);
+    sessionStorage.setItem("eest2_auth_token", json.token);
 
-  btn.disabled = false;
-  btn.textContent = "🔐 Ingresar al Sistema";
-
-  if (ok) {
     if (recordar) {
       localStorage.setItem("eest2_auth_user", u);
-      localStorage.setItem("eest2_auth_pass", c);
+      localStorage.setItem("eest2_auth_token", json.token);
     } else {
       localStorage.removeItem("eest2_auth_user");
-      localStorage.removeItem("eest2_auth_pass");
+      localStorage.removeItem("eest2_auth_token");
     }
+
+    document.getElementById("authInputPass").value = "";
     document.getElementById("loginOverlayScreen").classList.remove("open");
+
+    aplicarDatosRecibidos(json.data, false);
+    actualizarSubtituloHeader();
+
+    if (json.debeCambiarClave) {
+      abrirModalCambioClaveObligatorio();
+    } else if (!esRolFamiliaActual() && primeraCargaApp) {
+      primeraCargaApp = false;
+      abrirModalSelectorCurso(false);
+    }
+  } catch (err) {
+    mostrarPantallaLogin(err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Ingresar";
   }
 }
 
-function cerrarSesionActual() {
+async function cerrarSesionActual() {
   if (!confirm("¿Querés cerrar tu sesión actual?")) return;
-  sesionAuth = { usuario: "", clave: "" };
+  const tokenSalir = sesionAuth.token;
+  sesionAuth = { usuario: "", token: "" };
   localStorage.removeItem("eest2_auth_user");
+  localStorage.removeItem("eest2_auth_token");
   localStorage.removeItem("eest2_auth_pass");
+  sessionStorage.removeItem("eest2_auth_user");
+  sessionStorage.removeItem("eest2_auth_token");
   document.getElementById("authInputPass").value = "";
+
+  if (tokenSalir) {
+    try {
+      await fetch(scriptUrl, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({ accion: "logout", authToken: tokenSalir })
+      });
+    } catch (e) {}
+  }
   mostrarPantallaLogin("");
+}
+
+function abrirModalCambioClaveObligatorio() {
+  const modal = document.getElementById("modalCambioClaveObligatorio");
+  if (!modal) return;
+  document.getElementById("inpClaveOblig1").value = "";
+  document.getElementById("inpClaveOblig2").value = "";
+  const errBox = document.getElementById("errClaveOblig");
+  if (errBox) errBox.style.display = "none";
+  modal.classList.add("open");
+}
+
+async function confirmarCambioClaveObligatorio() {
+  const c1 = document.getElementById("inpClaveOblig1").value.trim();
+  const c2 = document.getElementById("inpClaveOblig2").value.trim();
+  const errBox = document.getElementById("errClaveOblig");
+
+  const mostrarErr = (msg) => {
+    if (errBox) { errBox.textContent = msg; errBox.style.display = "block"; }
+  };
+
+  if (c1.length < 6) return mostrarErr("La nueva contraseña debe tener al menos 6 caracteres.");
+  if (c1 !== c2) return mostrarErr("Las contraseñas no coinciden.");
+
+  const btn = document.getElementById("btnGuardarClaveOblig");
+  try {
+    if (btn) { btn.disabled = true; btn.textContent = "Guardando..."; }
+    const resp = await fetch(scriptUrl, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ accion: "cambiarMiClave", nuevaClave: c1 })
+    });
+    const json = await resp.json();
+    if (!json.ok) throw new Error(json.error);
+
+    document.getElementById("modalCambioClaveObligatorio").classList.remove("open");
+    mostrarToast("Contraseña actualizada");
+  } catch (err) {
+    mostrarErr(err.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "Guardar nueva contraseña"; }
+  }
 }
 
 function esAdminODirectivoActual() {
@@ -247,6 +349,7 @@ function esRolFamiliaActual() {
 function abrirModalGestionUsuarios() {
   limpiarFormularioGestionUsuario();
   renderizarTablaUsuariosSistema();
+  cargarAuditoriaSeguridadUI();
   document.getElementById("modalGestionUsuarios").classList.add("open");
 }
 
@@ -291,7 +394,8 @@ function limpiarFormularioGestionUsuario() {
 
 function editarUsuarioEnFormulario(u) {
   document.getElementById("usrFormLogin").value = u.usuario;
-  document.getElementById("usrFormClave").value = u.clave;
+  document.getElementById("usrFormClave").value = "";
+  document.getElementById("usrFormClave").placeholder = "Dejar vacío para mantener clave actual";
   document.getElementById("usrFormNombre").value = u.nombre;
   document.getElementById("usrFormRol").value = u.rol;
   actualizarVisibilidadCursosPreceptor();
@@ -308,18 +412,21 @@ function renderizarTablaUsuariosSistema() {
     return;
   }
 
-  let html = `<table class="app-table"><thead><tr><th>Usuario / DNI</th><th>Clave</th><th>Nombre</th><th>Rol</th><th>Cursos / Vínculo</th><th>Acciones</th></tr></thead><tbody>`;
+  let html = `<table class="app-table"><thead><tr><th>Usuario / DNI</th><th>Seguridad</th><th>Nombre</th><th>Rol</th><th>Cursos / Vínculo</th><th>Acciones</th></tr></thead><tbody>`;
   lista.forEach(u => {
+    const estadoClave = u.claveEncriptada
+      ? `<span class="badge badge-ok">Encriptada</span>`
+      : `<span class="badge badge-warn">Pendiente</span>`;
     html += `
       <tr>
-        <td><strong>${u.usuario}</strong></td>
-        <td><code>${u.clave}</code></td>
-        <td class="td-left">${u.nombre}</td>
-        <td><span class="badge badge-grp">${u.rol}</span></td>
-        <td>${u.cursosPermitidos}</td>
+        <td><strong>${escHtml(u.usuario)}</strong></td>
+        <td>${estadoClave}</td>
+        <td class="td-left">${escHtml(u.nombre)}</td>
+        <td><span class="badge badge-grp">${escHtml(u.rol)}</span></td>
+        <td>${escHtml(u.cursosPermitidos)}</td>
         <td>
-          <button type="button" class="btn-outline" style="padding:3px 7px; font-size:11px;" onclick='editarUsuarioEnFormulario(${JSON.stringify(u)})'>✏️ Editar</button>
-          <button type="button" class="btn-danger-outline" style="padding:3px 7px; font-size:11px;" onclick="eliminarUsuarioDesdePanel('${u.usuario}')">🗑️</button>
+          <button type="button" class="btn-outline" style="padding:3px 7px; font-size:11px;" onclick='editarUsuarioEnFormulario(${JSON.stringify(u)})'>Editar</button>
+          <button type="button" class="btn-danger-outline" style="padding:3px 7px; font-size:11px;" onclick="eliminarUsuarioDesdePanel('${escHtml(u.usuario)}')">🗑️</button>
         </td>
       </tr>
     `;
@@ -328,14 +435,78 @@ function renderizarTablaUsuariosSistema() {
   cont.innerHTML = html;
 }
 
+async function migrarClavesPendientesUI() {
+  try {
+    mostrarToast("Encriptando claves pendientes...");
+    const resp = await fetch(scriptUrl, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ accion: "migrarClavesHash" })
+    });
+    const json = await resp.json();
+    if (!json.ok) throw new Error(json.error);
+    estado.usuariosSistema = json.usuarios || [];
+    renderizarTablaUsuariosSistema();
+    cargarAuditoriaSeguridadUI();
+    mostrarToast(`Listo: ${json.encriptadas} clave(s) encriptadas con SHA-256`);
+  } catch (err) {
+    mostrarToast("Error: " + err.message, 4000);
+  }
+}
+
+async function cargarAuditoriaSeguridadUI() {
+  const cont = document.getElementById("contenedorTablaAuditoria");
+  if (!cont) return;
+  cont.innerHTML = `<p style="padding:8px; color:#64748b; font-size:12px;">Cargando registro...</p>`;
+  try {
+    const resp = await fetch(scriptUrl, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ accion: "obtenerAuditoria" })
+    });
+    const json = await resp.json();
+    if (!json.ok) throw new Error(json.error);
+    const lista = json.auditoria || [];
+    if (lista.length === 0) {
+      cont.innerHTML = `<p style="padding:8px; color:#64748b; font-size:12px;">Sin eventos registrados aún.</p>`;
+      return;
+    }
+    let html = `<table class="app-table"><thead><tr><th>Fecha / Hora</th><th>Usuario</th><th>Rol</th><th>Acción</th><th>Curso</th><th>Detalle</th></tr></thead><tbody>`;
+    lista.forEach(item => {
+      const clAcc = item.accion.indexOf("FALLIDO") !== -1 || item.accion.indexOf("BLOQUEADO") !== -1
+        ? "badge-danger"
+        : (item.accion.indexOf("LOGIN") !== -1 ? "badge-ok" : "badge-grp");
+      html += `
+        <tr>
+          <td style="white-space:nowrap; font-size:11px;">${escHtml(item.fechaHora)}</td>
+          <td><strong>${escHtml(item.usuario)}</strong></td>
+          <td>${escHtml(item.rol)}</td>
+          <td><span class="badge ${clAcc}">${escHtml(item.accion)}</span></td>
+          <td>${escHtml(item.curso || "-")}</td>
+          <td class="td-left" style="font-size:11px;">${escHtml(item.detalle)}</td>
+        </tr>
+      `;
+    });
+    html += `</tbody></table>`;
+    cont.innerHTML = html;
+  } catch (err) {
+    cont.innerHTML = `<p style="padding:8px; color:#b91c1c; font-size:12px;">Error: ${escHtml(err.message)}</p>`;
+  }
+}
+
 async function guardarUsuarioDesdePanel() {
   const usuario = document.getElementById("usrFormLogin").value.trim();
   const clave = document.getElementById("usrFormClave").value.trim();
   const nombre = document.getElementById("usrFormNombre").value.trim();
   const rol = document.getElementById("usrFormRol").value;
 
-  if (!usuario || !clave) {
-    mostrarToast("⚠️ Completá el usuario y la clave");
+  const existeYa = (estado.usuariosSistema || []).some(u => u.usuario.toLowerCase() === usuario.toLowerCase());
+  if (!usuario) {
+    mostrarToast("Completá el nombre de usuario");
+    return;
+  }
+  if (!existeYa && !clave) {
+    mostrarToast("Asigná una contraseña inicial al nuevo usuario");
     return;
   }
 
@@ -390,8 +561,12 @@ async function eliminarUsuarioDesdePanel(usuarioBorrar) {
 }
 
 async function cambiarMiPropiaClavePrompt() {
-  const nueva = prompt("Ingresá tu nueva contraseña o PIN (mínimo 3 caracteres):");
-  if (!nueva || nueva.trim().length < 3) return;
+  const nueva = prompt("Ingresá tu nueva contraseña (mínimo 6 caracteres):");
+  if (!nueva) return;
+  if (nueva.trim().length < 6) {
+    mostrarToast("La contraseña debe tener al menos 6 caracteres");
+    return;
+  }
   try {
     const resp = await fetch(scriptUrl, {
       method: "POST",
@@ -404,13 +579,9 @@ async function cambiarMiPropiaClavePrompt() {
     const json = await resp.json();
     if (!json.ok) throw new Error(json.error);
 
-    sesionAuth.clave = nueva.trim();
-    if (localStorage.getItem("eest2_auth_user")) {
-      localStorage.setItem("eest2_auth_pass", nueva.trim());
-    }
-    mostrarToast("🔑 Contraseña actualizada con éxito");
+    mostrarToast("Contraseña actualizada");
   } catch (err) {
-    mostrarToast("⚠️ Error: " + err.message, 4000);
+    mostrarToast("Error: " + err.message, 4000);
   }
 }
 
@@ -591,7 +762,7 @@ async function ejecutarCreacionNuevoCurso() {
     mostrarToast("⚠️ Error al crear curso: " + err.message, 4000);
   } finally {
     btn.disabled = false;
-    btn.textContent = "🚀 Crear Curso y Pasar a Configurar Horario del Parte";
+    btn.textContent = "Crear curso y configurar horario";
   }
 }
 
@@ -932,20 +1103,44 @@ function mostrarVista(nombre) {
   }
 }
 
+function actualizarSubtituloHeader() {
+  const esFam = esRolFamiliaActual();
+  if (esFam) {
+    const aluNombre = (estado.estudiantes && estado.estudiantes[0]) ? estado.estudiantes[0].nombre : "";
+    document.getElementById("statusSubtitle").textContent = `Portal de Familias — Curso: ${estado.cursoActual.replace(/_/g, " ")} ${aluNombre ? "• " + aluNombre : ""}`;
+    primeraCargaApp = false;
+  } else {
+    const cantActivos = (estado.estudiantes || []).filter(e => !esEstudianteTachado(e)).length;
+    const tagCiclo = estado.cicloActual ? `Ciclo ${estado.cicloActual} • ` : "";
+    document.getElementById("statusSubtitle").textContent = `${tagCiclo}Curso: ${estado.cursoActual.replace(/_/g, " ")} (${cantActivos} activos)`;
+  }
+}
+
 async function cargarDatosDesdeSheet(nombreCurso, mostrarSelectorInicial = false) {
   try {
     document.getElementById("statusSubtitle").textContent = "Sincronizando con Google Sheets...";
-    const url = nombreCurso
-      ? `${scriptUrl}?curso=${encodeURIComponent(nombreCurso)}&t=${Date.now()}`
-      : `${scriptUrl}?t=${Date.now()}`;
-
-    const resp = await fetch(url);
+    const resp = await fetch(scriptUrl, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({
+        accion: "obtenerDatos",
+        curso: nombreCurso || "",
+        ciclo: cicloSeleccionado || ""
+      })
+    });
     const json = await resp.json();
     ocultarPantallaCargaInicial();
 
     if (!json.ok) {
+      if (json.debeCambiarClave) {
+        abrirModalCambioClaveObligatorio();
+        return false;
+      }
       if (json.requiereLogin) {
-        document.getElementById("statusSubtitle").textContent = "🔒 Sesión requerida";
+        sesionAuth.token = "";
+        localStorage.removeItem("eest2_auth_token");
+        sessionStorage.removeItem("eest2_auth_token");
+        document.getElementById("statusSubtitle").textContent = "Sesión requerida";
         mostrarPantallaLogin(json.error || "Iniciá sesión para continuar.");
         return false;
       }
@@ -953,24 +1148,16 @@ async function cargarDatosDesdeSheet(nombreCurso, mostrarSelectorInicial = false
     }
 
     aplicarDatosRecibidos(json.data, false);
-    const esFam = esRolFamiliaActual();
-    if (esFam) {
-      const aluNombre = (estado.estudiantes && estado.estudiantes[0]) ? estado.estudiantes[0].nombre : "";
-      document.getElementById("statusSubtitle").textContent = `Portal de Familias — Curso: ${estado.cursoActual.replace(/_/g, " ")} ${aluNombre ? '• ' + aluNombre : ''}`;
+    actualizarSubtituloHeader();
+    if (!esRolFamiliaActual() && mostrarSelectorInicial && primeraCargaApp) {
       primeraCargaApp = false;
-    } else {
-      const cantActivos = (estado.estudiantes || []).filter(e => !esEstudianteTachado(e)).length;
-      document.getElementById("statusSubtitle").textContent = `Curso: ${estado.cursoActual.replace(/_/g, " ")} (${cantActivos} activos)`;
-      if (mostrarSelectorInicial && primeraCargaApp) {
-        primeraCargaApp = false;
-        abrirModalSelectorCurso(false);
-      }
+      abrirModalSelectorCurso(false);
     }
     return true;
   } catch (err) {
     ocultarPantallaCargaInicial();
     document.getElementById("statusSubtitle").textContent = "Error de conexión";
-    mostrarToast("⚠️ Error: " + err.message, 4000);
+    mostrarToast("Error: " + err.message, 4000);
     return false;
   }
 }
@@ -1002,7 +1189,6 @@ function aplicarDatosRecibidos(data, preservarSeleccionPantalla = false) {
   const esJefe = esAdminODirectivoActual();
   const esFam = esRolFamiliaActual();
 
-  // Visibilidad de controles según rol (Personal vs Familia)
   document.querySelectorAll(".staff-only-ctrl").forEach(el => {
     el.style.display = esFam ? "none" : "";
   });
@@ -1015,12 +1201,32 @@ function aplicarDatosRecibidos(data, preservarSeleccionPantalla = false) {
   const lblTitAlu = document.getElementById("lblTituloVistaAlumno");
   if (lblTitAlu) {
     lblTitAlu.textContent = esFam
-      ? "👨‍👩‍👧 Portal de Familias — Comunicados Oficiales, Asistencia (75% por Materia) y Calificaciones"
-      : "👤 Ficha Académica, Gráficos de Asistencia (75% por Materia) y Notificaciones a Familias";
+      ? "Portal de Familias"
+      : "Legajo del Estudiante";
+  }
+
+  if (data.cicloActual) {
+    cicloSeleccionado = String(data.cicloActual);
+    localStorage.setItem("eest2_ultimo_ciclo", cicloSeleccionado);
+  }
+
+  const selCiclo = document.getElementById("cicloSelect");
+  if (selCiclo) {
+    selCiclo.innerHTML = "";
+    (data.ciclosLectivos || []).forEach(c => {
+      const opt = document.createElement("option");
+      opt.value = c.ciclo;
+      const tagEst = c.estado === "CERRADO" ? " [Cerrado]" : (c.estado === "PREPARACION" ? " [En preparación]" : "");
+      opt.textContent = `${c.etiqueta}${tagEst}`;
+      if (String(c.ciclo) === String(data.cicloActual)) opt.selected = true;
+      selCiclo.appendChild(opt);
+    });
   }
 
   const btnUsrs = document.getElementById("btnAdminUsuarios");
   if (btnUsrs) btnUsrs.style.display = (!esFam && esJefe) ? "inline-flex" : "none";
+  const btnCiclos = document.getElementById("btnAdminCiclos");
+  if (btnCiclos) btnCiclos.style.display = (!esFam && esJefe) ? "inline-flex" : "none";
   const btnNC1 = document.getElementById("btnHeaderNuevoCurso");
   if (btnNC1) btnNC1.style.display = (!esFam && esJefe) ? "inline-flex" : "none";
   const btnNC2 = document.getElementById("btnAbrirFormCrearCurso");
@@ -1106,5 +1312,323 @@ function configurarUrlManual() {
     scriptUrl = nueva.trim();
     localStorage.setItem("eest2_script_url", scriptUrl);
     cargarDatosDesdeSheet("", false);
+  }
+}
+
+let previaPaseActual = null;
+
+function cambiarCicloLectivo(nuevoCiclo) {
+  if (esRolFamiliaActual() || !nuevoCiclo) return;
+  cicloSeleccionado = String(nuevoCiclo);
+  localStorage.setItem("eest2_ultimo_ciclo", cicloSeleccionado);
+  cargarDatosDesdeSheet("", false);
+}
+
+function abrirModalCiclosLectivos() {
+  if (!esAdminODirectivoActual()) return;
+  previaPaseActual = null;
+  renderTablaCiclosModal();
+  poblarSelectoresPaseModal();
+  const contPrev = document.getElementById("contenedorPreviaPaseDeAnio");
+  if (contPrev) contPrev.innerHTML = "";
+  const btnEjec = document.getElementById("btnConfirmarPaseDeAnio");
+  if (btnEjec) btnEjec.style.display = "none";
+
+  const ciclos = estado.ciclosLectivos || [];
+  const maxAnio = ciclos.reduce((m, c) => Math.max(m, parseInt(c.ciclo, 10) || 0), new Date().getFullYear());
+  const inpAnio = document.getElementById("inpNuevoCicloAnio");
+  if (inpAnio) inpAnio.value = String(maxAnio + 1);
+
+  document.getElementById("modalCiclosLectivos").classList.add("open");
+}
+
+function cerrarModalCiclosLectivos() {
+  document.getElementById("modalCiclosLectivos").classList.remove("open");
+}
+
+function renderTablaCiclosModal() {
+  const cont = document.getElementById("contenedorListaCiclos");
+  if (!cont) return;
+  const ciclos = estado.ciclosLectivos || [];
+  if (ciclos.length === 0) {
+    cont.innerHTML = `<p style="padding:10px; color:#64748b;">Sin ciclos registrados.</p>`;
+    return;
+  }
+
+  let html = `<table class="app-table"><thead><tr><th>Ciclo</th><th>Período</th><th>Estado</th><th>Creado</th><th>Acciones</th></tr></thead><tbody>`;
+  ciclos.forEach(c => {
+    const esAct = c.estado === "ACTIVO";
+    const clBadge = esAct ? "badge-ok" : (c.estado === "CERRADO" ? "badge-grp" : "badge-warn");
+    html += `
+      <tr>
+        <td><strong>${c.ciclo}</strong></td>
+        <td class="td-left">${c.etiqueta}</td>
+        <td><span class="badge ${clBadge}">${c.estado}</span></td>
+        <td>${c.fechaCreacion || "-"}</td>
+        <td>
+          <div style="display:flex; gap:5px; justify-content:center; flex-wrap:wrap;">
+            <button type="button" class="btn-outline" style="padding:3px 7px; font-size:11px;" onclick="cerrarModalCiclosLectivos(); cambiarCicloLectivo('${c.ciclo}');">Abrir</button>
+            ${!esAct ? `<button type="button" class="btn-success-outline" style="padding:3px 7px; font-size:11px;" onclick="cambiarEstadoCicloUI('${c.ciclo}', 'ACTIVO')">Activar</button>` : ""}
+            ${c.estado !== "CERRADO" ? `<button type="button" class="btn-danger-outline" style="padding:3px 7px; font-size:11px;" onclick="cambiarEstadoCicloUI('${c.ciclo}', 'CERRADO')">Cerrar</button>` : ""}
+          </div>
+        </td>
+      </tr>
+    `;
+  });
+  html += `</tbody></table>`;
+  cont.innerHTML = html;
+}
+
+function poblarSelectoresPaseModal() {
+  const ciclos = estado.ciclosLectivos || [];
+  const selBase = document.getElementById("selCicloBaseNuevo");
+  const selOrig = document.getElementById("selPaseCicloOrigen");
+  const selDest = document.getElementById("selPaseCicloDestino");
+
+  [selBase, selOrig, selDest].forEach(sel => {
+    if (!sel) return;
+    sel.innerHTML = "";
+    ciclos.forEach(c => {
+      const opt = document.createElement("option");
+      opt.value = c.ciclo;
+      opt.textContent = `${c.etiqueta} (${c.estado})`;
+      sel.appendChild(opt);
+    });
+  });
+
+  if (selBase && estado.cicloActual) selBase.value = String(estado.cicloActual);
+  if (selOrig && ciclos.length > 0) selOrig.value = ciclos[0].ciclo;
+  if (selDest && ciclos.length > 1) selDest.value = ciclos[ciclos.length - 1].ciclo;
+}
+
+async function crearNuevoCicloLectivoUI() {
+  const anio = document.getElementById("inpNuevoCicloAnio")?.value.trim() || "";
+  const cicloBase = document.getElementById("selCicloBaseNuevo")?.value || estado.cicloActual;
+  const activarNuevo = document.getElementById("chkActivarNuevoCiclo")?.checked || false;
+  if (!anio) return mostrarToast("Ingresá el año del nuevo ciclo lectivo");
+
+  const ok = confirm(`¿Crear la planilla del Ciclo ${anio} (Mar ${anio} - Feb ${Number(anio) + 1}) en la carpeta "Intranet de la Escuela"?
+
+Se copiará la estructura de cursos y horarios desde ${cicloBase}, sin estudiantes.`);
+  if (!ok) return;
+
+  const btn = document.getElementById("btnCrearNuevoCiclo");
+  try {
+    if (btn) { btn.disabled = true; btn.textContent = "Creando planilla en Drive..."; }
+    const resp = await fetch(scriptUrl, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({
+        accion: "crearCicloLectivo",
+        anioNuevo: anio,
+        cicloBase: cicloBase,
+        activarNuevo: activarNuevo
+      })
+    });
+    const json = await resp.json();
+    if (!json.ok) throw new Error(json.error);
+
+    aplicarDatosRecibidos(json.data, false);
+    renderTablaCiclosModal();
+    poblarSelectoresPaseModal();
+    mostrarToast(`Ciclo ${anio} creado en "Intranet de la Escuela" (${json.resultado.cursosCopiados} cursos copiados)`, 4500);
+  } catch (err) {
+    mostrarToast("Error: " + err.message, 4500);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "Crear Ciclo Lectivo"; }
+  }
+}
+
+async function cambiarEstadoCicloUI(cicloObjetivo, nuevoEstado) {
+  if (!confirm(`¿Cambiar el ciclo ${cicloObjetivo} a estado ${nuevoEstado}?`)) return;
+  try {
+    mostrarToast("Actualizando estado del ciclo...");
+    const resp = await fetch(scriptUrl, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({
+        accion: "cambiarEstadoCiclo",
+        cicloObjetivo: cicloObjetivo,
+        nuevoEstado: nuevoEstado
+      })
+    });
+    const json = await resp.json();
+    if (!json.ok) throw new Error(json.error);
+    aplicarDatosRecibidos(json.data, false);
+    renderTablaCiclosModal();
+    poblarSelectoresPaseModal();
+    mostrarToast(`Ciclo ${cicloObjetivo}: ${nuevoEstado}`);
+  } catch (err) {
+    mostrarToast("Error: " + err.message, 4000);
+  }
+}
+
+async function cargarPreviaPaseDeAnioUI() {
+  const orig = document.getElementById("selPaseCicloOrigen")?.value || "";
+  const dest = document.getElementById("selPaseCicloDestino")?.value || "";
+  if (!orig || !dest || orig === dest) {
+    return mostrarToast("Elegí dos ciclos distintos (origen y destino)");
+  }
+
+  const cont = document.getElementById("contenedorPreviaPaseDeAnio");
+  const btnEjec = document.getElementById("btnConfirmarPaseDeAnio");
+  if (cont) cont.innerHTML = `<p style="padding:10px; color:#475569;">Analizando calificaciones y materias pendientes de ${orig}...</p>`;
+
+  try {
+    const resp = await fetch(scriptUrl, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({
+        accion: "obtenerPreviaPaseDeAnio",
+        cicloOrigen: orig,
+        cicloDestino: dest
+      })
+    });
+    const json = await resp.json();
+    if (!json.ok) throw new Error(json.error);
+
+    previaPaseActual = json.previa;
+    renderPreviaPaseDeAnio();
+    if (btnEjec) btnEjec.style.display = "inline-flex";
+  } catch (err) {
+    if (cont) cont.innerHTML = `<p style="padding:10px; color:#b91c1c;">Error: ${err.message}</p>`;
+  }
+}
+
+function aplicarDestinoMasivoCursoPase(idxCurso, nuevoDestino) {
+  if (!previaPaseActual || !previaPaseActual.cursos[idxCurso]) return;
+  previaPaseActual.cursos[idxCurso].cursoDestinoSugerido = nuevoDestino;
+  previaPaseActual.cursos[idxCurso].estudiantes.forEach(est => {
+    est.cursoDestinoSugerido = nuevoDestino;
+  });
+  renderPreviaPaseDeAnio();
+}
+
+function cambiarDestinoAlumnoPase(idxCurso, idxEst, nuevoDestino) {
+  if (!previaPaseActual || !previaPaseActual.cursos[idxCurso]) return;
+  const est = previaPaseActual.cursos[idxCurso].estudiantes[idxEst];
+  if (est) est.cursoDestinoSugerido = nuevoDestino;
+}
+
+function renderPreviaPaseDeAnio() {
+  const cont = document.getElementById("contenedorPreviaPaseDeAnio");
+  if (!cont || !previaPaseActual) return;
+
+  const opcionesDestBase = [...(previaPaseActual.cursosDestinoDisponibles || [])];
+  if (!opcionesDestBase.includes("EGRESADO")) opcionesDestBase.push("EGRESADO");
+  if (!opcionesDestBase.includes("OMITIR")) opcionesDestBase.push("OMITIR");
+
+  let html = "";
+  (previaPaseActual.cursos || []).forEach((cursoObj, idxC) => {
+    const opcionesCurso = [...opcionesDestBase];
+    if (cursoObj.cursoDestinoSugerido && !opcionesCurso.includes(cursoObj.cursoDestinoSugerido)) {
+      opcionesCurso.unshift(cursoObj.cursoDestinoSugerido);
+    }
+
+    html += `
+      <div style="border:1px solid #cbd5e1; border-radius:8px; padding:10px; margin-bottom:10px; background:#fff;">
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:8px;">
+          <strong>${cursoObj.cursoOrigen.replace(/_/g, " ")} (${cursoObj.estudiantes.length} activos)</strong>
+          <div style="display:flex; align-items:center; gap:6px; font-size:12px;">
+            <label style="font-weight:700; color:#475569;">Destino del curso:</label>
+            <select style="padding:4px 8px; border:1px solid #cbd5e1; border-radius:4px; font-weight:700;" onchange="aplicarDestinoMasivoCursoPase(${idxC}, this.value)">
+              ${opcionesCurso.map(op => `<option value="${op}" ${op === cursoObj.cursoDestinoSugerido ? "selected" : ""}>${op.replace(/_/g, " ")}</option>`).join("")}
+            </select>
+          </div>
+        </div>
+    `;
+
+    if (cursoObj.estudiantes.length === 0) {
+      html += `<p style="font-size:12px; color:#64748b;">Sin estudiantes activos.</p>`;
+    } else {
+      html += `<div class="table-wrap"><table class="app-table"><thead><tr><th>Estudiante</th><th>Desap. ${previaPaseActual.cicloOrigen}</th><th>Previas Ant.</th><th>Total</th><th>Situación</th><th>Curso Destino (${previaPaseActual.cicloDestino})</th></tr></thead><tbody>`;
+      cursoObj.estudiantes.forEach((est, idxE) => {
+        const clEst = est.estadoSugerido === "PROMUEVE"
+          ? "badge-ok"
+          : (est.estadoSugerido === "PROMUEVE_CON_PENDIENTES" ? "badge-warn" : "badge-danger");
+        const txtEst = est.estadoSugerido === "PROMUEVE"
+          ? "Promueve"
+          : (est.estadoSugerido === "PROMUEVE_CON_PENDIENTES" ? "Con pendientes" : "Revisión EDTE (>5)");
+
+        const opsAlu = [...opcionesCurso];
+        if (!opsAlu.includes(cursoObj.cursoOrigen)) opsAlu.push(cursoObj.cursoOrigen);
+        if (est.cursoDestinoSugerido && !opsAlu.includes(est.cursoDestinoSugerido)) opsAlu.unshift(est.cursoDestinoSugerido);
+
+        html += `
+          <tr>
+            <td class="td-left">${est.nombre}</td>
+            <td>${est.desaprobadasCiclo.length}</td>
+            <td>${est.cantPreviasAnteriores}</td>
+            <td><strong>${est.totalPendientes}</strong></td>
+            <td><span class="badge ${clEst}">${txtEst}</span></td>
+            <td>
+              <select style="padding:3px 6px; font-size:11.5px; border:1px solid #cbd5e1; border-radius:4px;" onchange="cambiarDestinoAlumnoPase(${idxC}, ${idxE}, this.value)">
+                ${opsAlu.map(op => `<option value="${op}" ${op === est.cursoDestinoSugerido ? "selected" : ""}>${op.replace(/_/g, " ")}</option>`).join("")}
+              </select>
+            </td>
+          </tr>
+        `;
+      });
+      html += `</tbody></table></div>`;
+    }
+    html += `</div>`;
+  });
+
+  cont.innerHTML = html || `<p style="padding:10px; color:#64748b;">No se encontraron cursos en el ciclo origen.</p>`;
+}
+
+async function ejecutarPaseDeAnioUI() {
+  if (!previaPaseActual) return;
+  const orig = previaPaseActual.cicloOrigen;
+  const dest = previaPaseActual.cicloDestino;
+  const cerrarOrig = document.getElementById("chkPaseCerrarOrigen")?.checked ?? true;
+  const activarDest = document.getElementById("chkPaseActivarDestino")?.checked ?? true;
+
+  const decisiones = [];
+  (previaPaseActual.cursos || []).forEach(c => {
+    (c.estudiantes || []).forEach(est => {
+      decisiones.push({
+        nombre: est.nombre,
+        dni: est.dni,
+        grupo: est.grupo,
+        cursoOrigen: c.cursoOrigen,
+        cursoDestino: est.cursoDestinoSugerido,
+        desaprobadasCiclo: est.desaprobadasCiclo,
+        totalPendientes: est.totalPendientes
+      });
+    });
+  });
+
+  if (!confirm(`¿Confirmar el pase de año de ${decisiones.length} estudiante(s) desde ${orig} hacia ${dest}?
+
+Se cargarán las nóminas ordenadas alfabéticamente y se registrarán las materias pendientes de acreditación.`)) {
+    return;
+  }
+
+  const btn = document.getElementById("btnConfirmarPaseDeAnio");
+  try {
+    if (btn) { btn.disabled = true; btn.textContent = "Procesando pase de año..."; }
+    const resp = await fetch(scriptUrl, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({
+        accion: "ejecutarPaseDeAnio",
+        cicloOrigen: orig,
+        cicloDestino: dest,
+        cerrarCicloOrigen: cerrarOrig,
+        activarCicloDestino: activarDest,
+        decisiones: decisiones
+      })
+    });
+    const json = await resp.json();
+    if (!json.ok) throw new Error(json.error);
+
+    aplicarDatosRecibidos(json.data, false);
+    cerrarModalCiclosLectivos();
+    mostrarToast(`Pase completado: ${json.resultado.alumnosMovidos} promovidos, ${json.resultado.alumnosEgresados} egresados, ${json.resultado.nuevasPendientesCreadas} pendientes registradas`, 5500);
+  } catch (err) {
+    mostrarToast("Error en pase de año: " + err.message, 4500);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "Confirmar Pase de Año"; }
   }
 }

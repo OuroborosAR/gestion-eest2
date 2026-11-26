@@ -3,16 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Gestión Académica, Asistencia, Familias y Actas - EEST N°2</title>
-  <!-- Metadatos PWA para instalación en celular -->
+  <title>E.E.S.T. N° 2 — Gestión Escolar</title>
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="EEST N°2 Gestión">
   <meta name="theme-color" content="#1e3a8a">
   <link rel="apple-touch-icon" href="logo.png">
-  
-  <!-- Enlaces de PWA y Estilos -->
   <link rel="manifest" href="manifest.json">
   <link rel="stylesheet" href="styles.css">
 
@@ -25,13 +22,9 @@
   </script>
 </head>
 <body>
-
-  <!-- MARCA DE AGUA TENUE DE FONDO CON EL ESCUDO DE LA EEST N°2 -->
   <div class="watermark-school-bg">
     <img class="school-logo-eest2" alt="Escudo EEST N°2">
   </div>
-
-  <!-- PANTALLA DE ESPERA INICIAL CON ESCUDO DE LA ESCUELA -->
   <div id="initialLoaderOverlay" class="initial-loader-overlay">
     <div class="loader-logo-card">
       <img class="school-logo-eest2" alt="Escudo E.E.S.T. N°2">
@@ -39,10 +32,8 @@
     <div class="loader-title">E.E.S.T. N°2 de San Fernando</div>
     <div style="font-size:13px; color:#e2e8f0; font-weight:700; margin-bottom:2px;">"Pbro. Dr. Manuel de San Ginés"</div>
     <div class="loader-spinner"></div>
-    <div class="loader-subtitle" id="loaderTextMsg">Conectando con Google Sheets y cargando estados administrativos...</div>
+    <div class="loader-subtitle" id="loaderTextMsg">Cargando sistema...</div>
   </div>
-
-  <!-- PANTALLA DE LOGIN PROTEGIDA (PERSONAL Y FAMILIAS POR DNI) -->
   <div id="loginOverlayScreen" class="login-overlay-screen">
     <div class="login-card-box">
       <img class="school-logo-eest2" alt="Escudo EEST N°2">
@@ -50,18 +41,18 @@
       <p style="font-size:12px; color:#64748b; font-weight:700; margin-bottom:10px;">"Pbro. Dr. Manuel de San Ginés"<br>Sistema de Gestión Académica y Portal de Familias</p>
 
       <div style="background:#eff6ff; border:1px solid #bfdbfe; color:#1e3a8a; border-radius:8px; padding:8px 10px; font-size:11.5px; text-align:left; margin-bottom:12px; line-height:1.35;">
-        👨‍👩‍👧 <strong>Ingreso para Familias:</strong> colocá el <b>N° de DNI del estudiante</b> (sin puntos) tanto en Usuario como en Contraseña.
+        <strong>Familias:</strong> ingresá el <b>DNI del estudiante</b> (sin puntos) como usuario y contraseña.
       </div>
 
       <div id="loginErrorBanner" style="display:none; background:#fee2e2; color:#b91c1c; padding:8px 10px; border-radius:8px; font-size:12px; font-weight:700; margin-bottom:12px;"></div>
 
       <div class="form-group" style="text-align:left; margin-bottom:10px;">
-        <label>👤 Usuario o DNI del Estudiante</label>
+        <label>Usuario o DNI del Estudiante</label>
         <input type="text" id="authInputUser" placeholder="DNI del alumno (Familias) o Usuario (Personal)" autocomplete="username">
       </div>
 
       <div class="form-group" style="text-align:left; margin-bottom:10px;">
-        <label>🔒 Contraseña o PIN</label>
+        <label>Contraseña o PIN</label>
         <input type="password" id="authInputPass" placeholder="DNI del alumno o tu clave" autocomplete="current-password" onkeydown="if(event.key==='Enter') iniciarSesionSistema()">
       </div>
 
@@ -71,7 +62,7 @@
       </div>
 
       <button type="button" id="btnSubmitLogin" class="btn-main btn-print-blue" style="width:100%;" onclick="iniciarSesionSistema()">
-        🔐 Ingresar al Sistema
+        Ingresar
       </button>
     </div>
   </div>
@@ -81,7 +72,7 @@
       <div class="brand-header-flex">
         <img class="brand-mini-logo school-logo-eest2" alt="Escudo">
         <div>
-          <div class="app-title">E.E.S.T. N° 2 — Gestión Académica, Asistencia y Portal de Familias</div>
+          <div class="app-title">E.E.S.T. N° 2 — Gestión Escolar</div>
           <div class="app-subtitle" id="statusSubtitle">Conectando con Google Sheets...</div>
         </div>
       </div>
@@ -90,6 +81,7 @@
           <span id="lblActiveUserName">USUARIO</span>
           <span id="lblActiveUserRole" class="role-badge-pill">ROL</span>
         </span>
+        <button class="btn-icon" onclick="abrirModalCiclosLectivos()" id="btnAdminCiclos" style="display:none; background:#0f766e;" title="Ciclos Lectivos y Pase de Año">📅 Ciclos</button>
         <button class="btn-icon" onclick="abrirModalGestionUsuarios()" id="btnAdminUsuarios" style="display:none; background:#4f46e5;" title="Administrar Usuarios y Roles">👥 Usuarios</button>
         <button class="btn-icon" onclick="cambiarMiPropiaClavePrompt()" title="Cambiar mi contraseña o PIN">🔑 Clave</button>
         <button class="btn-icon" onclick="instalarPWA()" id="btnInstalarPWA" style="display:none;" title="Instalar App en el Celular">📲 Instalar App</button>
@@ -102,6 +94,9 @@
     </div>
 
     <div class="header-controls" id="headerStaffControlsBar">
+      <select id="cicloSelect" onchange="cambiarCicloLectivo(this.value)" style="max-width:230px;" title="Ciclo Lectivo">
+        <option value="">Ciclo...</option>
+      </select>
       <select id="cursoSelect" onchange="cambiarCurso(this.value)">
         <option value="">Cargando cursos...</option>
       </select>
@@ -122,12 +117,10 @@
   </nav>
 
   <main class="container">
-
-    <!-- VISTA 1: ASISTENCIA DIARIA, ASISTENCIA DOCENTE POR MATERIA Y WHATSAPP -->
     <section id="vista-asistencia">
       <div class="panel">
         <div class="panel-title">
-          <span>📋 Parte Diario Digital (Envío por WhatsApp y Control de 75% por Materia)</span>
+          <span>Asistencia Diaria</span>
           <button class="btn-outline" onclick="marcarTodosPresentes()">✔️ Todos Presentes</button>
         </div>
 
@@ -210,8 +203,6 @@
             <input type="text" id="asistObs" placeholder="Ej: Sin actividad en 5ta hora" oninput="actualizarVistaPreviaWA()">
           </div>
         </div>
-
-        <!-- CONTROL DE ASISTENCIA DOCENTE POR MATERIA DEL DÍA (PARA CÁLCULO DEL 75% DE CLASES DICTADAS) -->
         <div id="contenedorAsistenciaDocenteDia" class="prof-asist-box"></div>
 
         <div id="bannerEstadoParte" class="edit-mode-banner"></div>
@@ -262,14 +253,14 @@
 
       <div class="panel">
         <div class="panel-title">
-          <span>📊 Acumulado de Inasistencias (Marzo a Diciembre)</span>
+          <span>Acumulado de Inasistencias</span>
         </div>
         <div class="table-wrap" id="tablaAcumuladoInasistencias"></div>
       </div>
 
       <div class="panel">
         <div class="panel-title">
-          <span>🕒 Historial de Partes Registrados (Tocá "✏️ Cargar" para revisar un día)</span>
+          <span>Historial de Asistencia</span>
           <select id="filtroHistorialTurno" onchange="renderHistorialAsistencias()" style="padding:4px 8px; font-size:12px; border-radius:4px;">
             <option value="ALL">Todos los turnos/grupos</option>
           </select>
@@ -277,8 +268,6 @@
         <div class="table-wrap" id="tablaHistorialPartes"></div>
       </div>
     </section>
-
-    <!-- VISTA 2: PARTE DIARIO IMPRIMIBLE (5 SEMANAS EN 4 PÁGINAS / 2 HOJAS) -->
     <section id="vista-parte" class="hidden">
       <div class="pd-toolbar">
         <div class="pd-toolbar-group">
@@ -314,9 +303,7 @@
         </div>
 
         <div class="pd-hint">
-          💡 <strong>Parte Diario Mensual (5 Semanas en 4 Páginas / 2 Hojas A4 — Curso: <span id="pdCursoLabel">Curso</span>):</strong>
-          <strong>Hoja 1 (Págs. 1 y 2):</strong> Frente Firmas y Dorso Ausentes de Lunes, Martes y Miércoles |
-          <strong>Hoja 2 (Págs. 3 y 4):</strong> Frente Firmas y Dorso Ausentes de Jueves y Viernes.
+          <strong>Parte Diario — <span id="pdCursoLabel">Curso</span>:</strong> Hoja 1 (Lun a Mié) | Hoja 2 (Jue y Vie).
         </div>
       </div>
 
@@ -324,12 +311,10 @@
         <div id="pdDocumentRoot"></div>
       </div>
     </section>
-
-    <!-- VISTA 3: CARGA RÁPIDA POR MATERIA -->
     <section id="vista-materia" class="hidden">
       <div class="panel">
         <div class="panel-title">
-          <span>📚 Calificaciones y Valoraciones por Materia (Ordenadas: 📘 Teoría y 🔧 Taller)</span>
+          <span>Calificaciones por Materia</span>
           <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
             <label style="font-size:11.5px; color:#475569; display:flex; align-items:center; gap:4px; cursor:pointer;">
               <input type="checkbox" id="chkMostrarTachadosMateria" onchange="renderVistaMateria()">
@@ -341,49 +326,43 @@
           </div>
         </div>
         <div class="form-group" style="margin-bottom:12px;">
-          <label>Seleccionar Materia (Primero Teoría, luego Taller)</label>
+          <label>Materia</label>
           <select id="materiaSelect" onchange="renderVistaMateria()"></select>
         </div>
         <div id="contenedorTarjetasMateria"></div>
       </div>
     </section>
-
-    <!-- VISTA 4: FICHA INDIVIDUAL POR ALUMNO + PORTAL FAMILIAS + GRÁFICOS + 75% POR MATERIA -->
     <section id="vista-alumno" class="hidden">
       <div class="panel">
         <div class="panel-title">
-          <span id="lblTituloVistaAlumno">👤 Ficha Académica, Gráficos de Asistencia (75% por Materia) y Notificaciones a Familias</span>
+          <span id="lblTituloVistaAlumno">Legajo del Estudiante</span>
         </div>
         <div class="form-group" id="boxSelectorAlumnoStaff" style="margin-bottom:12px;">
-          <label>Seleccionar Estudiante (Incluye Activos y Tachados)</label>
+          <label>Estudiante</label>
           <select id="alumnoSelect" onchange="renderVistaAlumno()"></select>
         </div>
         <div id="contenedorFichaAlumno"></div>
       </div>
     </section>
-
-    <!-- VISTA 5: GENERADOR E HISTORIAL DE ACTAS INSTITUCIONALES (DEC. 2299/11 Y RES. 1650/24) -->
     <section id="vista-actas" class="hidden">
       <div class="panel">
         <div class="panel-title">
-          <span>📄 Generador Automático de Actas Institucionales (Dec. 2299/11 Arts. 217-220 y Res. 1650/24)</span>
+          <span>Generador de Actas (Dec. 2299/11 y Res. 1650/24)</span>
         </div>
         <div id="contenedorGeneradorActas"></div>
       </div>
 
       <div class="panel">
         <div class="panel-title">
-          <span>🗂️ Registro de Actas Labradas en el Curso</span>
+          <span>Registro de Actas</span>
         </div>
         <div class="table-wrap" id="tablaHistorialActasCurso"></div>
       </div>
     </section>
-
-    <!-- VISTA 6: PLANILLA GENERAL COMPLETA -->
     <section id="vista-planilla" class="hidden">
       <div class="panel">
         <div class="panel-title">
-          <span>📊 Planilla General del Curso (Ordenada: 📘 Teoría primero | 🔧 Taller después)</span>
+          <span>Planilla General</span>
           <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
             <label style="font-size:11.5px; color:#475569; display:flex; align-items:center; gap:4px; cursor:pointer;">
               <input type="checkbox" id="chkMostrarTachadosPlanilla" checked onchange="renderTablaCompleta()">
@@ -395,23 +374,19 @@
         <div class="table-wrap" id="contenedorTablaCompleta"></div>
       </div>
     </section>
-
-    <!-- CONTENEDORES DE IMPRESIÓN DEDICADOS -->
     <div id="printComunicadosRoot"></div>
     <div id="printActasRoot"></div>
 
   </main>
-
-  <!-- MODAL 0: ADMINISTRACIÓN DE USUARIOS Y ROLES (ADMIN Y DIRECTIVO) -->
   <div id="modalGestionUsuarios" class="modal-backdrop">
     <div class="modal-box" style="max-width:740px;">
       <div class="modal-header">
-        <h2>👥 Administración de Usuarios y Permisos</h2>
+        <h2>Usuarios y Permisos</h2>
         <button class="btn-outline" onclick="cerrarModalGestionUsuarios()">✖ Cerrar</button>
       </div>
 
       <div style="background:#f8fafc; border:1px solid #cbd5e1; border-radius:8px; padding:12px; margin-bottom:14px;">
-        <h3 style="font-size:13.5px; color:#1e3a8a; margin-bottom:8px;">➕ Crear o Editar Usuario</h3>
+        <h3 style="font-size:13.5px; color:#1e3a8a; margin-bottom:8px;">Crear o editar usuario</h3>
         <div class="form-grid">
           <div class="form-group">
             <label>Usuario o DNI (sin espacios)</label>
@@ -447,38 +422,45 @@
         </div>
       </div>
 
-      <h3 style="font-size:13.5px; color:#0f172a; margin-bottom:8px;">📋 Usuarios Activos en Google Sheets</h3>
-      <div class="table-wrap" id="contenedorTablaUsuariosSistema"></div>
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:8px;">
+        <h3 style="font-size:13.5px; color:#0f172a;">Usuarios registrados</h3>
+        <button type="button" class="btn-outline" onclick="migrarClavesPendientesUI()">Encriptar claves pendientes</button>
+      </div>
+      <div class="table-wrap" id="contenedorTablaUsuariosSistema" style="margin-bottom:16px;"></div>
+
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:8px;">
+        <h3 style="font-size:13.5px; color:#0f172a;">Registro de Auditoría (Últimos accesos y cambios)</h3>
+        <button type="button" class="btn-outline" onclick="cargarAuditoriaSeguridadUI()">Actualizar</button>
+      </div>
+      <div class="table-wrap" id="contenedorTablaAuditoria" style="max-height:28vh; overflow-y:auto;"></div>
     </div>
   </div>
-
-  <!-- MODAL 1: SELECTOR, CREADOR Y ELIMINADOR DE CURSOS -->
   <div id="modalSelectorCurso" class="modal-backdrop">
     <div class="modal-box">
       <div class="modal-header">
-        <h2>🏫 Seleccionar, Crear o Eliminar Curso</h2>
+        <h2>Cursos</h2>
         <button class="btn-outline" onclick="cerrarModalSelectorCurso()">✖ Cerrar</button>
       </div>
 
       <div id="seccionSeleccionarCursoExistente">
         <p style="font-size:12.5px; color:#475569; margin-bottom:10px;">
-          Elegí el curso con el que querés trabajar hoy, creá uno nuevo o eliminá un curso con el botón 🗑️:
+          Seleccioná un curso o creá uno nuevo:
         </p>
         <div id="gridCursosDisponibles" class="course-cards-grid"></div>
 
         <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:space-between; border-top:1px solid #e2e8f0; padding-top:12px;">
           <button type="button" id="btnAbrirFormCrearCurso" class="btn-main btn-w4b" style="padding:10px 14px; font-size:13px;" onclick="mostrarFormularioNuevoCurso(true)">
-            ➕ Crear Nuevo Curso desde Cero
+            + Nuevo curso
           </button>
           <button type="button" class="btn-outline" onclick="abrirModalConfigHorarioDesdeSelector()">
-            🗓️ Configurar Horarios / Profes del Curso Actual
+            Configurar horarios del curso
           </button>
         </div>
       </div>
 
       <div id="seccionFormularioNuevoCurso" class="hidden" style="margin-top:12px;">
         <div style="background:#f8fafc; border:1px solid #cbd5e1; border-radius:8px; padding:12px;">
-          <h3 style="font-size:14px; color:#1e3a8a; margin-bottom:10px;">✨ Crear Nuevo Curso en Google Sheets</h3>
+          <h3 style="font-size:14px; color:#1e3a8a; margin-bottom:10px;">Nuevo curso</h3>
 
           <div class="form-grid">
             <div class="form-group">
@@ -512,19 +494,17 @@
           <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:12px; flex-wrap:wrap;">
             <button type="button" class="btn-outline" onclick="mostrarFormularioNuevoCurso(false)">⬅ Volver a mis cursos</button>
             <button type="button" class="btn-main btn-print-blue" id="btnConfirmarCrearCurso" style="padding:10px 16px; font-size:13px;" onclick="ejecutarCreacionNuevoCurso()">
-              🚀 Crear Curso y Pasar a Configurar Horario del Parte
+              Crear curso y configurar horario
             </button>
           </div>
         </div>
       </div>
     </div>
   </div>
-
-  <!-- MODAL 2: CONFIGURAR HORARIOS DEL PARTE -->
   <div id="modalConfigHorario" class="modal-backdrop">
     <div class="modal-box">
       <div class="modal-header">
-        <h2>🗓️ Configurar Horario, Materias y Profesores (<span id="lblCursoConfigHorario"></span>)</h2>
+        <h2>Horarios y Docentes (<span id="lblCursoConfigHorario"></span>)</h2>
         <button class="btn-outline" onclick="cerrarModalConfigHorario()">✖ Cerrar</button>
       </div>
 
@@ -567,12 +547,10 @@
       </div>
     </div>
   </div>
-
-  <!-- MODAL 3: CARGA MASIVA DE ALUMNOS -->
   <div id="modalCargaMasivaAlumnos" class="modal-backdrop">
     <div class="modal-box" style="max-width:560px;">
       <div class="modal-header">
-        <h2>👥 Carga Masiva de Estudiantes (<span id="lblCursoLoteAlumnos"></span>)</h2>
+        <h2>Carga Masiva de Estudiantes (<span id="lblCursoLoteAlumnos"></span>)</h2>
         <button class="btn-outline" onclick="cerrarModalCargaMasivaAlumnos()">✖ Cerrar</button>
       </div>
       <div class="form-group" style="margin-bottom:8px;">
@@ -592,9 +570,102 @@
     </div>
   </div>
 
-  <div id="toast" class="toast"></div>
+  <div id="modalCiclosLectivos" class="modal-backdrop">
+    <div class="modal-box" style="max-width:960px;">
+      <div class="modal-header">
+        <h2>Ciclos Lectivos y Pase de Año</h2>
+        <button class="btn-outline" onclick="cerrarModalCiclosLectivos()">Cerrar</button>
+      </div>
 
-  <!-- Módulos JavaScript separados -->
+      <div style="background:#f8fafc; border:1px solid #cbd5e1; border-radius:8px; padding:12px; margin-bottom:14px;">
+        <h3 style="font-size:13.5px; color:#1e3a8a; margin-bottom:8px;">Ciclos Lectivos Registrados</h3>
+        <div class="table-wrap" id="contenedorListaCiclos" style="margin-bottom:12px;"></div>
+
+        <h3 style="font-size:13px; color:#0f766e; margin-bottom:8px;">Crear Nuevo Ciclo Lectivo (Marzo a Febrero)</h3>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Año del Ciclo</label>
+            <input type="number" id="inpNuevoCicloAnio" min="2025" max="2050" placeholder="2027">
+          </div>
+          <div class="form-group">
+            <label>Copiar estructura de cursos desde</label>
+            <select id="selCicloBaseNuevo"></select>
+          </div>
+        </div>
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-top:10px;">
+          <label style="font-size:12px; font-weight:700; color:#334155; display:flex; align-items:center; gap:6px; cursor:pointer;">
+            <input type="checkbox" id="chkActivarNuevoCiclo">
+            Establecer inmediatamente como ciclo activo
+          </label>
+          <button type="button" class="btn-main btn-print-blue" id="btnCrearNuevoCiclo" style="padding:8px 14px; font-size:12.5px;" onclick="crearNuevoCicloLectivoUI()">
+            Crear Ciclo Lectivo
+          </button>
+        </div>
+        <p style="font-size:11px; color:#64748b; margin-top:6px;">
+          Se crea una planilla nueva en la carpeta "Intranet de la Escuela" con los cursos vacíos y los horarios copiados.
+        </p>
+      </div>
+
+      <div style="background:#fffaf5; border:1px solid #fdba74; border-radius:8px; padding:12px;">
+        <h3 style="font-size:13.5px; color:#9a3412; margin-bottom:8px;">Asistente de Cierre de Ciclo y Pase de Año</h3>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Ciclo Origen (que finaliza)</label>
+            <select id="selPaseCicloOrigen"></select>
+          </div>
+          <div class="form-group">
+            <label>Ciclo Destino (nuevo año)</label>
+            <select id="selPaseCicloDestino"></select>
+          </div>
+        </div>
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-top:10px;">
+          <div style="display:flex; gap:14px; flex-wrap:wrap;">
+            <label style="font-size:12px; font-weight:700; color:#334155; display:flex; align-items:center; gap:5px; cursor:pointer;">
+              <input type="checkbox" id="chkPaseCerrarOrigen" checked>
+              Marcar ciclo origen como CERRADO
+            </label>
+            <label style="font-size:12px; font-weight:700; color:#334155; display:flex; align-items:center; gap:5px; cursor:pointer;">
+              <input type="checkbox" id="chkPaseActivarDestino" checked>
+              Activar ciclo destino
+            </label>
+          </div>
+          <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <button type="button" class="btn-outline" onclick="cargarPreviaPaseDeAnioUI()">Analizar Promoción</button>
+            <button type="button" class="btn-main btn-w4b" id="btnConfirmarPaseDeAnio" style="display:none; padding:8px 14px; font-size:12.5px;" onclick="ejecutarPaseDeAnioUI()">
+              Confirmar Pase de Año
+            </button>
+          </div>
+        </div>
+        <div id="contenedorPreviaPaseDeAnio" style="margin-top:12px; max-height:42vh; overflow-y:auto;"></div>
+      </div>
+    </div>
+  </div>
+
+
+  <div id="modalCambioClaveObligatorio" class="modal-backdrop" style="z-index:9600;">
+    <div class="modal-box" style="max-width:420px;">
+      <div class="modal-header">
+        <h2>Cambio de contraseña obligatorio</h2>
+      </div>
+      <p style="font-size:12.5px; color:#334155; margin-bottom:12px; line-height:1.4;">
+        Por seguridad de los datos de los estudiantes, debés reemplazar tu contraseña inicial por una personal (mínimo 6 caracteres).
+      </p>
+      <div id="errClaveOblig" style="display:none; background:#fee2e2; color:#b91c1c; padding:8px 10px; border-radius:6px; font-size:12px; font-weight:700; margin-bottom:10px;"></div>
+      <div class="form-group" style="margin-bottom:10px;">
+        <label>Nueva contraseña</label>
+        <input type="password" id="inpClaveOblig1" placeholder="Mínimo 6 caracteres" autocomplete="new-password">
+      </div>
+      <div class="form-group" style="margin-bottom:14px;">
+        <label>Repetir nueva contraseña</label>
+        <input type="password" id="inpClaveOblig2" placeholder="Repetí la contraseña" autocomplete="new-password" onkeydown="if(event.key==='Enter') confirmarCambioClaveObligatorio()">
+      </div>
+      <button type="button" id="btnGuardarClaveOblig" class="btn-main btn-print-blue" style="width:100%;" onclick="confirmarCambioClaveObligatorio()">
+        Guardar nueva contraseña
+      </button>
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
   <script src="core.js"></script>
   <script src="academico.js"></script>
   <script src="parte.js"></script>

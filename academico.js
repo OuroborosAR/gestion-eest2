@@ -1,4 +1,3 @@
-/* ==================== UTILIDADES DE NORMALIZACIÓN Y ORDEN DE MATRÍCULA ==================== */
 function normalizarClaveNombreAlumno(nombreRaw) {
   return String(nombreRaw || "")
     .normalize("NFD")
@@ -28,7 +27,6 @@ function obtenerSiguienteNumeroOrden() {
   return ordenes.length > 0 ? Math.max(...ordenes) + 1 : 1;
 }
 
-/* ==================== CLASIFICACIÓN Y ORDENAMIENTO VISUAL DE MATERIAS ==================== */
 function obtenerMapaTiposMateriasLocal() {
   try {
     return JSON.parse(localStorage.getItem("eest2_tipos_materias") || "{}");
@@ -136,13 +134,46 @@ function alternarTipoMateriaTallerTeoria(indiceMat) {
   mostrarToast(`🔄 "${mat.nombre}" pasada a ${mapaManual[clave] === "TALLER" ? "🔧 Taller" : "📘 Teoría"}`);
 }
 
-/* ==================== LÓGICA DE PROMEDIOS Y PONDERACIÓN (RÉGIMEN ACADÉMICO) ==================== */
 function parsearNotaNumerica(val) {
   if (val === undefined || val === null) return NaN;
   const str = String(val).trim().replace(",", ".");
-  if (!str || str.toUpperCase() === "AUS") return NaN;
+  const up = str.toUpperCase();
+  if (!str || up === "AUS" || up === "CI") return NaN;
   const n = parseFloat(str);
   return (!isNaN(n) && n >= 1 && n <= 10) ? n : NaN;
+}
+
+function obtenerColumnaHojaSubCampo(mat, sc) {
+  if (!mat || !sc) return -1;
+  const ancho = mat.anchoCols || 6;
+  if (ancho >= 8) return mat.columnaInicio + sc.offset;
+  if (sc.key === "final") return mat.columnaInicio + 5;
+  if (sc.key === "intDic" || sc.key === "intFeb") return -1;
+  return mat.columnaInicio + sc.offset;
+}
+
+function debeIntensificarMateria(objNotas) {
+  if (!objNotas) return false;
+  const c1 = parsearNotaNumerica(objNotas.cal1);
+  const c2 = parsearNotaNumerica(objNotas.cal2);
+  const i1 = parsearNotaNumerica(objNotas.int1);
+  const c1Up = String(objNotas.cal1 || "").trim().toUpperCase();
+  const c2Up = String(objNotas.cal2 || "").trim().toUpperCase();
+
+  const aprobo1C = (!isNaN(c1) && c1 >= 7) || (!isNaN(i1) && i1 >= 7);
+  const aprobo2C = (!isNaN(c2) && c2 >= 7);
+  if (aprobo1C && aprobo2C) return false;
+
+  const desaprobo1C = !aprobo1C && ((!isNaN(c1) && c1 < 7) || c1Up === "AUS");
+  const desaprobo2C = !aprobo2C && ((!isNaN(c2) && c2 < 7) || c2Up === "AUS");
+  return desaprobo1C || desaprobo2C;
+}
+
+function debeIntensificarFebrero(objNotas) {
+  if (!debeIntensificarMateria(objNotas)) return false;
+  const nDic = parsearNotaNumerica(objNotas.intDic);
+  if (!isNaN(nDic) && nDic >= 4) return false;
+  return true;
 }
 
 function calcularCalificacionFinalMateria(objNotas) {
@@ -162,10 +193,22 @@ function calcularCalificacionFinalMateria(objNotas) {
     const prom = Math.round(((notaEfectiva1C + c2) / 2) * 2) / 2;
     return String(prom);
   }
+
+  // En Diciembre y Febrero se aprueba con 4 o más
+  const nDic = parsearNotaNumerica(objNotas.intDic);
+  if (!isNaN(nDic) && nDic >= 4) {
+    return String(nDic);
+  }
+
+  const nFeb = parsearNotaNumerica(objNotas.intFeb);
+  if (!isNaN(nFeb) && nFeb >= 4) {
+    return String(nFeb);
+  }
+
   return "";
 }
 
-function calcularResumenSubModulosTallerCB(valoresTresModulos, esValoracion) {
+function calcularResumenSubModulosTallerCB(valoresTresModulos, esValoracion, umbralAprobacion = 7) {
   const limpios = (valoresTresModulos || [])
     .map(v => String(v === undefined || v === null ? "" : v).trim().toUpperCase())
     .filter(Boolean);
@@ -181,24 +224,28 @@ function calcularResumenSubModulosTallerCB(valoresTresModulos, esValoracion) {
 
   const numeros = [];
   let tieneAus = false;
+  let tieneCI = false;
 
   limpios.forEach(v => {
     if (v === "AUS") {
       tieneAus = true;
+    } else if (v === "CI") {
+      tieneCI = true;
     } else {
       const n = parsearNotaNumerica(v);
       if (!isNaN(n)) numeros.push(n);
     }
   });
 
-  const desaprobadas = numeros.filter(n => n < 7);
+  const desaprobadas = numeros.filter(n => n < umbralAprobacion);
   if (desaprobadas.length > 0) {
     return String(Math.max(...desaprobadas));
   }
 
+  if (tieneCI) return "CI";
   if (tieneAus) return "AUS";
 
-  if (numeros.length === 3 && numeros.every(n => n >= 7)) {
+  if (numeros.length === 3 && numeros.every(n => n >= umbralAprobacion)) {
     const suma = numeros[0] + numeros[1] + numeros[2];
     return String(Math.round(suma / 3));
   }
@@ -210,7 +257,7 @@ function recalcularNotasEstudianteLocal(est, matEditada, keyEditada) {
   if (!est || !est.notas || !matEditada) return;
   const notasMat = est.notas[matEditada.indice] || {};
 
-  if (["cal1", "cal2", "int1"].includes(keyEditada)) {
+  if (["cal1", "cal2", "int1", "intDic", "intFeb"].includes(keyEditada)) {
     notasMat.final = calcularCalificacionFinalMateria(notasMat);
   }
 
@@ -224,12 +271,12 @@ function recalcularNotasEstudianteLocal(est, matEditada, keyEditada) {
 
       ["val1", "val2"].forEach(kVal => {
         const vals = modulosSub.map(m => (est.notas[m.indice] && est.notas[m.indice][kVal]) || "");
-        notasResumen[kVal] = calcularResumenSubModulosTallerCB(vals, true);
+        notasResumen[kVal] = calcularResumenSubModulosTallerCB(vals, true, 7);
       });
 
       ["cal1", "cal2"].forEach(kCal => {
         const cals = modulosSub.map(m => (est.notas[m.indice] && est.notas[m.indice][kCal]) || "");
-        notasResumen[kCal] = calcularResumenSubModulosTallerCB(cals, false);
+        notasResumen[kCal] = calcularResumenSubModulosTallerCB(cals, false, 7);
       });
 
       const tieneAlgunInt1 = modulosSub.some(m => String((est.notas[m.indice] && est.notas[m.indice].int1) || "").trim() !== "");
@@ -241,9 +288,41 @@ function recalcularNotasEstudianteLocal(est, matEditada, keyEditada) {
           const nCal1 = parsearNotaNumerica(nM.cal1);
           return (!isNaN(nCal1) && nCal1 >= 7) ? String(nM.cal1) : "";
         });
-        notasResumen.int1 = calcularResumenSubModulosTallerCB(calsInt1Efectivas, false);
+        notasResumen.int1 = calcularResumenSubModulosTallerCB(calsInt1Efectivas, false, 7);
       } else {
         notasResumen.int1 = "";
+      }
+
+      // Intensificación Diciembre para Taller CB (umbral 4)
+      const tieneAlgunDic = modulosSub.some(m => String((est.notas[m.indice] && est.notas[m.indice].intDic) || "").trim() !== "");
+      if (tieneAlgunDic) {
+        const valsDic = modulosSub.map(m => {
+          const nM = est.notas[m.indice] || {};
+          const vDic = String(nM.intDic || "").trim();
+          if (vDic !== "") return vDic;
+          const nFin = parsearNotaNumerica(calcularCalificacionFinalMateria({ ...nM, intDic: "", intFeb: "" }));
+          return (!isNaN(nFin) && nFin >= 7) ? String(nFin) : "";
+        });
+        notasResumen.intDic = calcularResumenSubModulosTallerCB(valsDic, false, 4);
+      } else {
+        notasResumen.intDic = "";
+      }
+
+      // Intensificación Febrero para Taller CB (umbral 4)
+      const tieneAlgunFeb = modulosSub.some(m => String((est.notas[m.indice] && est.notas[m.indice].intFeb) || "").trim() !== "");
+      if (tieneAlgunFeb) {
+        const valsFeb = modulosSub.map(m => {
+          const nM = est.notas[m.indice] || {};
+          const vFeb = String(nM.intFeb || "").trim();
+          if (vFeb !== "") return vFeb;
+          const nDic = parsearNotaNumerica(nM.intDic);
+          if (!isNaN(nDic) && nDic >= 4) return String(nDic);
+          const nFin = parsearNotaNumerica(calcularCalificacionFinalMateria({ ...nM, intDic: "", intFeb: "" }));
+          return (!isNaN(nFin) && nFin >= 7) ? String(nFin) : "";
+        });
+        notasResumen.intFeb = calcularResumenSubModulosTallerCB(valsFeb, false, 4);
+      } else {
+        notasResumen.intFeb = "";
       }
 
       notasResumen.final = calcularCalificacionFinalMateria(notasResumen);
@@ -251,7 +330,6 @@ function recalcularNotasEstudianteLocal(est, matEditada, keyEditada) {
   }
 }
 
-/* ==================== COLORES DE VALORACIONES Y CALIFICACIONES NUMÉRICAS ==================== */
 function obtenerClaseColorNota(valor) {
   const v = String(valor === undefined || valor === null ? "" : valor).trim().toUpperCase();
   if (!v || v === "-") return "";
@@ -259,6 +337,7 @@ function obtenerClaseColorNota(valor) {
   if (v === "TEA") return "val-TEA";
   if (v === "TEP") return "val-TEP";
   if (v === "TED") return "val-TED";
+  if (v === "CI") return "val-CI";
   if (v === "AUS") return "cal-rojo";
 
   const num = parseFloat(v.replace(",", "."));
@@ -363,7 +442,6 @@ function esEstudianteTachado(est) {
   return st.indexOf("tachado") !== -1 || st.indexOf("baja") !== -1 || st.indexOf("pase") !== -1;
 }
 
-/* ==================== ASISTENCIA DOCENTE POR MATERIA Y MOTOR DEL 75% ==================== */
 function obtenerDiaSemanaDesdeFechaDDMMYYYY(fechaStr) {
   const norm = normalizarFechaDDMMYYYY(fechaStr);
   const m = norm.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
@@ -467,8 +545,8 @@ function renderAsistenciaDocenteDia() {
   cont.style.display = "block";
   let html = `
     <div class="prof-asist-title">
-      <span>👩‍🏫 Asistencia Docente en ${diaSem} (${turnoRaw}) — Impacta en el 75% de Clases Dictadas</span>
-      <small style="color:#475569;">Tocá una materia si el profesor/a <b>NO asistió</b> (para descontarla de clases dictadas)</small>
+      <span>Asistencia Docente — ${diaSem} (${turnoRaw})</span>
+      <small style="color:#475569;">Marcá la materia si el docente no asistió</small>
     </div>
     <div class="prof-pills-wrap">
   `;
@@ -629,7 +707,6 @@ function calcularAsistenciaPorMateriaEstudiante(est) {
   });
 }
 
-/* ==================== ESTADO DEL DÍA / TURNO (SIN DOCENTES, SUSPENSIÓN, FERIADO) ==================== */
 const ETIQUETAS_ESTADO_DIA = {
   NORMAL: "Clases Normales",
   SIN_DOCENTES: "Sin Docentes",
@@ -842,7 +919,6 @@ function guardarPreceptorLocal() {
   actualizarVistaPreviaWA();
 }
 
-/* ==================== GESTIÓN DE ESTUDIANTES: ORDEN, EDICIÓN, RENUMERACIÓN Y DEDUPLICACIÓN ==================== */
 async function alternarEstadoTachado(filaHoja) {
   const est = (estado.estudiantes || []).find(e => e.filaHoja === Number(filaHoja));
   if (!est) return;
@@ -1428,9 +1504,51 @@ function renderHistorialAsistencias() {
   cont.innerHTML = html;
 }
 
-/* ==================== VISTAS DE CALIFICACIONES, FICHA ALUMNO, FAMILIAS Y ACTAS ==================== */
 function limpiarNombreMateria(nombreRaw) {
   return String(nombreRaw || "").replace(/^Materia\s*\d+\s*:\s*/i, "").trim();
+}
+
+function construirBannerMigracionDicFebHTML() {
+  const tiene6Cols = (estado.materias || []).some(m => (m.anchoCols || 6) < 8);
+  if (!tiene6Cols) return "";
+  if (typeof esRolFamiliaActual === "function" && esRolFamiliaActual()) return "";
+  return `
+    <div style="background:#eff6ff; border:1px solid #93c5fd; border-radius:8px; padding:10px 12px; margin-bottom:12px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+      <div style="font-size:12px; color:#1e3a8a; font-weight:700;">
+        📌 Este curso todavía usa 6 columnas por materia. Actualizalo para habilitar las columnas de <b>Intensificación Diciembre y Febrero</b> en Google Sheets sin perder ninguna nota.
+      </div>
+      <button type="button" class="btn-main btn-print-blue" style="padding:7px 12px; font-size:12px;" onclick="migrarCursoAColumnasDicFeb()">
+        🔄 Habilitar Diciembre y Febrero en este Curso
+      </button>
+    </div>
+  `;
+}
+
+async function migrarCursoAColumnasDicFeb() {
+  const cursoLimpio = (estado.cursoActual || "").replace(/_/g, " ");
+  if (!confirm(`¿Agregar automáticamente las columnas de "Intensificación Dic." e "Intensificación Feb." en todas las materias de ${cursoLimpio}?
+
+Todas las notas e inasistencias ya cargadas se conservan intactas.`)) {
+    return;
+  }
+  try {
+    mostrarToast("⏳ Actualizando columnas de Diciembre y Febrero en Sheets...", 5000);
+    const resp = await fetch(scriptUrl, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({
+        accion: "migrarColumnasDicFeb",
+        curso: estado.cursoActual
+      })
+    });
+    const json = await resp.json();
+    if (!json.ok) throw new Error(json.error);
+
+    aplicarDatosRecibidos(json.data, true);
+    mostrarToast("✅ Columnas de Diciembre y Febrero habilitadas en " + cursoLimpio, 4000);
+  } catch (err) {
+    mostrarToast("⚠️ Error al migrar: " + err.message, 4500);
+  }
 }
 
 function crearSelectorNotaHTML(filaHoja, colHoja, valorActual, tipo, claveCampo = "", esResumenTaller = false, objNotasMateria = null) {
@@ -1438,7 +1556,10 @@ function crearSelectorNotaHTML(filaHoja, colHoja, valorActual, tipo, claveCampo 
   const clColor = obtenerClaseColorNota(v);
   const esCampoFinal = (claveCampo === "final");
   const esCampoInt1 = (claveCampo === "int1");
+  const esCampoDic = (claveCampo === "intDic");
+  const esCampoFeb = (claveCampo === "intFeb");
   const esFam = (typeof esRolFamiliaActual === "function" && esRolFamiliaActual());
+  const sinColumnaMigrada = (Number(colHoja) === -1);
 
   let int1BloqueadoPorRegla = false;
   if (esCampoInt1 && objNotasMateria) {
@@ -1450,10 +1571,27 @@ function crearSelectorNotaHTML(filaHoja, colHoja, valorActual, tipo, claveCampo 
     }
   }
 
-  const estaBloqueado = esFam || esCampoFinal || esResumenTaller || int1BloqueadoPorRegla;
+  let dicBloqueadoPorRegla = false;
+  if (esCampoDic) {
+    dicBloqueadoPorRegla = !debeIntensificarMateria(objNotasMateria);
+  }
+
+  let febBloqueadoPorRegla = false;
+  if (esCampoFeb) {
+    febBloqueadoPorRegla = !debeIntensificarFebrero(objNotasMateria);
+  }
+
+  const estaBloqueado = esFam || esCampoFinal || esResumenTaller || sinColumnaMigrada || int1BloqueadoPorRegla || dicBloqueadoPorRegla || febBloqueadoPorRegla;
+
+  let motivoBloqueo = "Se calcula automáticamente";
+  if (esFam) motivoBloqueo = "Modo lectura para familias";
+  else if (sinColumnaMigrada) motivoBloqueo = "Tocá 'Habilitar Diciembre y Febrero' arriba para activar esta columna en Sheets";
+  else if (esCampoInt1 && int1BloqueadoPorRegla) motivoBloqueo = "Solo disponible si el 1° Cuatrimestre es 6 o menos";
+  else if (esCampoDic && dicBloqueadoPorRegla) motivoBloqueo = "Solo se habilita si el estudiante debe intensificar (1°C o 2°C menor a 7)";
+  else if (esCampoFeb && febBloqueadoPorRegla) motivoBloqueo = "Solo se habilita si debe intensificar y no aprobó en Diciembre (4 o más)";
 
   const attrDisabled = estaBloqueado
-    ? `disabled style="cursor:not-allowed; opacity:0.9;" title="${esFam ? 'Modo lectura para familias' : (esCampoInt1 && int1BloqueadoPorRegla ? 'Solo disponible si el 1° Cuatrimestre es 6 o menos' : 'Se calcula automáticamente')}"`
+    ? `disabled style="cursor:not-allowed; opacity:${(dicBloqueadoPorRegla || febBloqueadoPorRegla || sinColumnaMigrada) ? '0.45' : '0.9'};" title="${motivoBloqueo}"`
     : "";
 
   if (tipo === "val") {
@@ -1485,6 +1623,15 @@ function crearSelectorNotaHTML(filaHoja, colHoja, valorActual, tipo, claveCampo 
     return `<select class="${clColor}" ${attrDisabled} onchange="guardarCeldaRemota(${filaHoja}, ${colHoja}, this)">${opts}</select>`;
   }
 
+  if ((esCampoDic || esCampoFeb) && !esResumenTaller) {
+    for (let n = 10; n >= 1; n--) {
+      opts += `<option value="${n}" ${v === String(n) ? "selected" : ""}>${n}</option>`;
+    }
+    opts += `<option value="CI" ${v === "CI" ? "selected" : ""}>CI</option>`;
+    opts += `<option value="AUS" ${v === "AUS" ? "selected" : ""}>AUS</option>`;
+    return `<select class="${clColor}" ${attrDisabled} onchange="guardarCeldaRemota(${filaHoja}, ${colHoja}, this)">${opts}</select>`;
+  }
+
   for (let n = 10; n >= 1; n--) {
     opts += `<option value="${n}" ${v === String(n) ? "selected" : ""}>${n}</option>`;
   }
@@ -1501,7 +1648,7 @@ function renderVistaMateria() {
   if (!mat) { cont.innerHTML = "<p>Sin materias.</p>"; return; }
 
   const esTal = esMateriaDeTaller(mat);
-  let html = `
+  let html = construirBannerMigracionDicFebHTML() + `
     <div class="section-divider-banner ${esTal ? 'divider-taller' : 'divider-teoria'}" style="display:flex; justify-content:space-between; align-items:center;">
       <span>${esTal ? '🔧 Materia de Taller' : '📘 Materia de Teoría'}: ${mat.nombre}</span>
       <span class="tag-tipo-mat ${esTal ? 'tag-tipo-taller' : 'tag-tipo-teoria'}"
@@ -1535,7 +1682,7 @@ function renderVistaMateria() {
       <div class="grade-inputs-grid">`;
 
     SUB_CAMPOS.forEach(sc => {
-      const colHoja = mat.columnaInicio + sc.offset;
+      const colHoja = obtenerColumnaHojaSubCampo(mat, sc);
       const etiquetaCampo = (sc.key === "final") ? `${sc.label} (Auto)` : sc.label;
       html += `<div class="mini-field">
         <label>${etiquetaCampo}</label>
@@ -1640,6 +1787,15 @@ function construirMensajeWhatsAppAlumno(est) {
     matsTaller.forEach(m => lineas.push(formatearLineaMateriaWhatsApp(m, est)));
   }
 
+  const pendActivasWA = obtenerPendientesDeEstudiante(est).filter(p => p.estado !== "ACREDITADA");
+  if (pendActivasWA.length > 0) {
+    lineas.push(``, `📚 *PENDIENTES DE AÑOS ANTERIORES (${pendActivasWA.length}):*`);
+    pendActivasWA.forEach(p => {
+      const condTxt = p.condicion === "RECURSADO" ? "Recursado" : "Comisión Evaluadora";
+      lineas.push(`• *${p.materia}* (${p.anioOrigen || "Año ant."}) — _${condTxt}_`);
+    });
+  }
+
   if (configInformeAlumno.notaAdicional && configInformeAlumno.notaAdicional.trim()) {
     lineas.push(``, `📝 *Nota:* ${configInformeAlumno.notaAdicional.trim()}`);
   }
@@ -1692,6 +1848,8 @@ function construirTalonComunicadoHTML(est) {
       <td class="${obtenerClaseColorNota(notasMat.val2)}">${notasMat.val2 || "-"}</td>
       <td class="${obtenerClaseColorNota(notasMat.cal2)}">${notasMat.cal2 || "-"}</td>
       <td class="${obtenerClaseColorNota(notasMat.int1)}">${notasMat.int1 || "-"}</td>
+      <td class="${obtenerClaseColorNota(notasMat.intDic)}">${notasMat.intDic || "-"}</td>
+      <td class="${obtenerClaseColorNota(notasMat.intFeb)}">${notasMat.intFeb || "-"}</td>
       <td class="${obtenerClaseColorNota(notasMat.final)}"><strong>${notasMat.final || "-"}</strong></td>
     </tr>`;
   });
@@ -1715,14 +1873,20 @@ function construirTalonComunicadoHTML(est) {
         <div><strong>Inasistencias por mes:</strong> ${resumenMeses}</div>
         <div><strong>Días Aus./Tarde (Teoría):</strong> ${fechasTeoFinal.length > 0 ? fechasTeoFinal.join(", ") : "Ninguno"}</div>
         <div><strong>Días Aus./Tarde (Taller):</strong> ${fechasTalFinal.length > 0 ? fechasTalFinal.join(", ") : "Ninguno"}</div>
+        ${(() => {
+          const pAct = obtenerPendientesDeEstudiante(est).filter(p => p.estado !== "ACREDITADA");
+          if (pAct.length === 0) return "";
+          return `<div><strong>Pendientes Años Ant. (${pAct.length}/${TOPE_MATERIAS_PENDIENTES}):</strong> ${pAct.map(p => `${p.materia} (${p.anioOrigen || "Ant."})`).join(" | ")}</div>`;
+        })()}
       </div>
       <table class="com-table">
         <thead>
           <tr>
-            <th style="text-align:left; width:36%;">MATERIA</th><th style="width:10%;">ÁREA</th>
-            <th style="width:9%;">1° Val.</th><th style="width:9%;">Cal. 1°C</th>
-            <th style="width:9%;">2° Val.</th><th style="width:9%;">Cal. 2°C</th>
-            <th style="width:9%;">Intensif.</th><th style="width:9%;">Final</th>
+            <th style="text-align:left; width:30%;">MATERIA</th><th style="width:8%;">ÁREA</th>
+            <th style="width:7.5%;">1° Val.</th><th style="width:7.5%;">1°C</th>
+            <th style="width:7.5%;">2° Val.</th><th style="width:7.5%;">2°C</th>
+            <th style="width:8%;">Int. 1°C</th><th style="width:8%;">Dic.</th>
+            <th style="width:8%;">Feb.</th><th style="width:8%;">Final</th>
           </tr>
         </thead>
         <tbody>${filasTabla}</tbody>
@@ -1757,7 +1921,6 @@ function imprimirComunicadosCursoCompleto() {
   setTimeout(() => document.body.classList.remove("print-mode-comunicado"), 600);
 }
 
-/* ==================== GUARDADO DE DATOS FAMILIA Y NOTIFICACIONES POR EMAIL ==================== */
 async function guardarDatosFamiliaUI(filaHoja) {
   const est = (estado.estudiantes || []).find(e => e.filaHoja === Number(filaHoja));
   if (!est) return;
@@ -1942,7 +2105,328 @@ async function eliminarNotificacionUI(idNotif) {
   }
 }
 
-/* ==================== RENDER DE GRÁFICOS Y FICHA COMPLETA DEL ALUMNO ==================== */
+const TOPE_MATERIAS_PENDIENTES = 5;
+
+function obtenerPendientesDeEstudiante(est) {
+  if (!est) return [];
+  const lista = estado.pendientesCurso || [];
+  const dniEst = String(est.dni || "").replace(/\D+/g, "").trim();
+  const claveEst = normalizarClaveNombreAlumno(est.nombre);
+
+  return lista.filter(p => {
+    const dniP = String(p.dniAlumno || "").replace(/\D+/g, "").trim();
+    if (dniEst && dniP && dniEst === dniP) return true;
+    return normalizarClaveNombreAlumno(p.nombreAlumno) === claveEst;
+  });
+}
+
+function toggleFormNuevaPendiente() {
+  const box = document.getElementById("formNuevaPendienteBox");
+  if (!box) return;
+  box.style.display = (box.style.display === "none" || !box.style.display) ? "block" : "none";
+}
+
+async function guardarNuevaPendienteUI(filaHoja) {
+  const est = (estado.estudiantes || []).find(e => e.filaHoja === Number(filaHoja));
+  if (!est) return;
+
+  const materia = document.getElementById("pendInputMateria")?.value.trim() || "";
+  const anioOrigen = document.getElementById("pendInputAnioOrigen")?.value.trim() || "";
+  const area = document.getElementById("pendInputArea")?.value || "TEORIA";
+  const condicion = document.getElementById("pendInputCondicion")?.value || "COMISION_EVALUADORA";
+  const instanciaFecha = document.getElementById("pendInputInstancia")?.value.trim() || "";
+  const observaciones = document.getElementById("pendInputObs")?.value.trim() || "";
+
+  if (!materia) {
+    mostrarToast("⚠️ Escribí el nombre de la materia pendiente");
+    return;
+  }
+
+  try {
+    mostrarToast("⏳ Guardando materia pendiente...");
+    const resp = await fetch(scriptUrl, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({
+        accion: "guardarMateriaPendiente",
+        curso: estado.cursoActual,
+        pendiente: {
+          dniAlumno: est.dni || "",
+          nombreAlumno: est.nombre,
+          anioOrigen: anioOrigen || "Año anterior",
+          materia: materia,
+          area: area,
+          condicion: condicion,
+          instanciaFecha: instanciaFecha,
+          observaciones: observaciones
+        }
+      })
+    });
+    const json = await resp.json();
+    if (!json.ok) throw new Error(json.error);
+
+    aplicarDatosRecibidos(json.data, true);
+    mostrarToast(`✅ Materia pendiente "${materia.toUpperCase()}" registrada`);
+  } catch (err) {
+    mostrarToast("⚠️ Error: " + err.message, 4000);
+  }
+}
+
+async function acreditarPendienteUI(idPendiente, nombreMat) {
+  const notaRaw = prompt(`Acreditación en Comisión Evaluadora — "${nombreMat}"\n\nIngresá la calificación de acreditación (4 a 10):`);
+  if (notaRaw === null) return;
+  const notaNum = parseFloat(String(notaRaw).trim().replace(",", "."));
+  if (isNaN(notaNum) || notaNum < 4 || notaNum > 10) {
+    mostrarToast("⚠️ Para acreditar la nota debe ser entre 4 y 10");
+    return;
+  }
+
+  const hoy = new Date();
+  const fechaHoy = `${String(hoy.getDate()).padStart(2, "0")}/${String(hoy.getMonth() + 1).padStart(2, "0")}/${hoy.getFullYear()}`;
+  const instancia = prompt("Instancia / Mesa y Fecha:", `Comisión Evaluadora (${fechaHoy})`);
+  if (instancia === null) return;
+
+  const obs = prompt("Observaciones / Libro y Folio de Acta (Opcional):", "");
+  if (obs === null) return;
+
+  try {
+    mostrarToast("⏳ Registrando acreditación...");
+    const resp = await fetch(scriptUrl, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({
+        accion: "acreditarMateriaPendiente",
+        curso: estado.cursoActual,
+        acreditacion: {
+          idPendiente: idPendiente,
+          nota: notaNum,
+          instanciaFecha: instancia.trim(),
+          observaciones: obs.trim()
+        }
+      })
+    });
+    const json = await resp.json();
+    if (!json.ok) throw new Error(json.error);
+
+    aplicarDatosRecibidos(json.data, true);
+    mostrarToast(`✅ "${nombreMat}" acreditada con ${notaNum}`);
+  } catch (err) {
+    mostrarToast("⚠️ Error: " + err.message, 4000);
+  }
+}
+
+async function reabrirPendienteUI(idPendiente, nombreMat) {
+  if (!confirm(`¿Volver "${nombreMat}" al estado PENDIENTE (se borrará la nota de acreditación)?`)) return;
+  try {
+    mostrarToast("⏳ Actualizando estado...");
+    const resp = await fetch(scriptUrl, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({
+        accion: "reabrirMateriaPendiente",
+        curso: estado.cursoActual,
+        idPendiente: idPendiente
+      })
+    });
+    const json = await resp.json();
+    if (!json.ok) throw new Error(json.error);
+
+    aplicarDatosRecibidos(json.data, true);
+    mostrarToast(`↩️ "${nombreMat}" marcada nuevamente como pendiente`);
+  } catch (err) {
+    mostrarToast("⚠️ Error: " + err.message, 4000);
+  }
+}
+
+async function alternarCondicionPendienteUI(idPendiente, condicionActual) {
+  const nuevaCond = (condicionActual === "RECURSADO") ? "COMISION_EVALUADORA" : "RECURSADO";
+  const labelNueva = (nuevaCond === "RECURSADO") ? "Recursado" : "Comisión Evaluadora";
+  try {
+    const resp = await fetch(scriptUrl, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({
+        accion: "cambiarCondicionPendiente",
+        curso: estado.cursoActual,
+        idPendiente: idPendiente,
+        nuevaCondicion: nuevaCond
+      })
+    });
+    const json = await resp.json();
+    if (!json.ok) throw new Error(json.error);
+
+    aplicarDatosRecibidos(json.data, true);
+    mostrarToast(`🔄 Condición cambiada a ${labelNueva}`);
+  } catch (err) {
+    mostrarToast("⚠️ Error: " + err.message, 4000);
+  }
+}
+
+async function eliminarPendienteUI(idPendiente, nombreMat) {
+  if (!confirm(`¿Eliminar el registro de materia pendiente "${nombreMat}"?`)) return;
+  try {
+    const resp = await fetch(scriptUrl, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({
+        accion: "eliminarMateriaPendiente",
+        curso: estado.cursoActual,
+        idPendiente: idPendiente
+      })
+    });
+    const json = await resp.json();
+    if (!json.ok) throw new Error(json.error);
+
+    aplicarDatosRecibidos(json.data, true);
+    mostrarToast("🗑️ Materia pendiente eliminada");
+  } catch (err) {
+    mostrarToast("⚠️ Error: " + err.message, 4000);
+  }
+}
+
+function construirSeccionPendientesAlumnoHTML(est, esFam) {
+  const todas = obtenerPendientesDeEstudiante(est);
+  const activas = todas.filter(p => p.estado !== "ACREDITADA");
+  const acreditadas = todas.filter(p => p.estado === "ACREDITADA");
+  const cantActivas = activas.length;
+
+  let badgeTope = "";
+  let alertaEDTE = "";
+  if (cantActivas === 0) {
+    badgeTope = `<span class="badge badge-ok">✅ 0 / ${TOPE_MATERIAS_PENDIENTES} pendientes (Al día)</span>`;
+  } else if (cantActivas <= TOPE_MATERIAS_PENDIENTES) {
+    badgeTope = `<span class="badge badge-warn">📋 ${cantActivas} / ${TOPE_MATERIAS_PENDIENTES} pendientes — Comisión Evaluadora</span>`;
+  } else {
+    badgeTope = `<span class="badge badge-danger">🚨 ${cantActivas} / ${TOPE_MATERIAS_PENDIENTES} pendientes — Supera tope (EDTE / Recursado)</span>`;
+    alertaEDTE = `
+      <div style="background:#fef2f2; border:1.5px solid #fca5a5; color:#991b1b; border-radius:8px; padding:8px 10px; font-size:12px; font-weight:700; margin-bottom:10px;">
+        🚨 Atención: El estudiante registra <b>${cantActivas} materias pendientes de acreditación</b>, superando el tope general de ${TOPE_MATERIAS_PENDIENTES}. Requiere intervención del Equipo de Definición de Trayectorias Educativas (EDTE) para definir qué materias acredita en Comisión Evaluadora y cuáles recursa.
+      </div>
+    `;
+  }
+
+  let html = `
+    <div class="panel pendientes-panel" style="margin-bottom:14px; border:1px solid #fdba74; background:#fffaf5;">
+      <div class="panel-title" style="color:#9a3412;">
+        <span>Materias Pendientes de Acreditación</span>
+        <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+          ${badgeTope}
+          ${!esFam ? `<button type="button" class="btn-outline" style="border-color:#c2410c; color:#9a3412;" onclick="toggleFormNuevaPendiente()">+ Cargar Pendiente</button>` : ""}
+        </div>
+      </div>
+      ${alertaEDTE}
+  `;
+
+  if (!esFam) {
+    html += `
+      <div id="formNuevaPendienteBox" style="display:none; background:#ffffff; border:1px solid #fed7aa; border-radius:8px; padding:10px 12px; margin-bottom:12px;">
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Materia Pendiente</label>
+            <input type="text" id="pendInputMateria" placeholder="Ej: Matemática, Taller, Física...">
+          </div>
+          <div class="form-group">
+            <label>Año / Curso de Origen</label>
+            <input type="text" id="pendInputAnioOrigen" placeholder="Ej: 4to - 2025">
+          </div>
+          <div class="form-group">
+            <label>Área</label>
+            <select id="pendInputArea">
+              <option value="TEORIA">📘 Teoría</option>
+              <option value="TALLER">🔧 Taller</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Condición (RA)</label>
+            <select id="pendInputCondicion">
+              <option value="COMISION_EVALUADORA">📝 Comisión Evaluadora</option>
+              <option value="RECURSADO">🔁 Recursado</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Instancia / Mesa Prevista (Opcional)</label>
+            <input type="text" id="pendInputInstancia" placeholder="Ej: Comisión Julio / Dic 2026">
+          </div>
+          <div class="form-group">
+            <label>Observaciones (Opcional)</label>
+            <input type="text" id="pendInputObs" placeholder="Ej: Profesor / Contenidos / Pase">
+          </div>
+        </div>
+        <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:10px;">
+          <button type="button" class="btn-outline" onclick="toggleFormNuevaPendiente()">Cancelar</button>
+          <button type="button" class="btn-main btn-print-blue" style="padding:7px 14px; font-size:12px;" onclick="guardarNuevaPendienteUI(${est.filaHoja})">
+            💾 Guardar Materia Pendiente
+          </button>
+        </div>
+      </div>
+    `;
+  }
+
+  if (todas.length === 0) {
+    html += `<p style="font-size:12px; color:#64748b;">No se registran materias pendientes de acreditación de años anteriores para este estudiante.</p>`;
+  } else {
+    activas.forEach(p => {
+      const esRec = p.condicion === "RECURSADO";
+      const matEsc = p.materia.replace(/'/g, "\'");
+      html += `
+        <div class="pendiente-item-card ${esRec ? 'pendiente-recursado' : ''}">
+          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px;">
+            <div>
+              <strong>${p.area === "TALLER" ? "🔧" : "📘"} ${p.materia}</strong>
+              <span class="badge badge-grp" style="margin-left:4px;">${p.anioOrigen || "Año ant."}</span>
+              <span class="badge ${esRec ? 'badge-danger' : 'badge-warn'}">${esRec ? '🔁 Recursado' : '📝 Comisión Evaluadora'}</span>
+            </div>
+            ${!esFam ? `
+            <div style="display:flex; gap:5px; flex-wrap:wrap;">
+              <button type="button" class="btn-success-outline" style="padding:4px 8px; font-size:11px;" onclick="acreditarPendienteUI('${p.id}', '${matEsc}')">✅ Acreditar</button>
+              <button type="button" class="btn-outline" style="padding:4px 8px; font-size:11px;" title="Cambiar entre Comisión Evaluadora y Recursado" onclick="alternarCondicionPendienteUI('${p.id}', '${p.condicion}')">🔁</button>
+              <button type="button" class="btn-danger-outline" style="padding:4px 8px; font-size:11px;" onclick="eliminarPendienteUI('${p.id}', '${matEsc}')">🗑️</button>
+            </div>` : ""}
+          </div>
+          ${(p.instanciaFecha || p.observaciones) ? `
+          <div style="font-size:11.5px; color:#475569; margin-top:4px;">
+            ${p.instanciaFecha ? `📅 <b>Instancia:</b> ${p.instanciaFecha}` : ""}
+            ${(p.instanciaFecha && p.observaciones) ? " &nbsp;|&nbsp; " : ""}
+            ${p.observaciones ? `📝 ${p.observaciones}` : ""}
+          </div>` : ""}
+        </div>
+      `;
+    });
+
+    if (acreditadas.length > 0) {
+      html += `<div style="font-size:11px; font-weight:800; color:#15803d; margin:10px 0 6px 0; text-transform:uppercase;">✅ Materias Pendientes ya Acreditadas (${acreditadas.length})</div>`;
+      acreditadas.forEach(p => {
+        const matEsc = p.materia.replace(/'/g, "\'");
+        html += `
+          <div class="pendiente-item-card pendiente-acreditada">
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px;">
+              <div>
+                <strong>${p.area === "TALLER" ? "🔧" : "📘"} ${p.materia}</strong>
+                <span class="badge badge-grp" style="margin-left:4px;">${p.anioOrigen || "Año ant."}</span>
+                <span class="badge badge-ok">✅ Acreditada: ${p.notaAcreditacion}</span>
+              </div>
+              ${!esFam ? `
+              <div style="display:flex; gap:5px;">
+                <button type="button" class="btn-outline" style="padding:3px 7px; font-size:11px;" onclick="reabrirPendienteUI('${p.id}', '${matEsc}')">↩️ Reabrir</button>
+                <button type="button" class="btn-danger-outline" style="padding:3px 7px; font-size:11px;" onclick="eliminarPendienteUI('${p.id}', '${matEsc}')">🗑️</button>
+              </div>` : ""}
+            </div>
+            ${(p.instanciaFecha || p.observaciones) ? `
+            <div style="font-size:11.5px; color:#475569; margin-top:4px;">
+              ${p.instanciaFecha ? `📅 ${p.instanciaFecha}` : ""}
+              ${(p.instanciaFecha && p.observaciones) ? " &nbsp;|&nbsp; " : ""}
+              ${p.observaciones ? `📝 ${p.observaciones}` : ""}
+            </div>` : ""}
+          </div>
+        `;
+      });
+    }
+  }
+
+  html += `</div>`;
+  return html;
+}
+
 function construirSeccionGraficosAsistenciaHTML(est, resumenPorMateria) {
   const totFaltas = (est.inasistencias && est.inasistencias.total) || 0;
   const partesNormales = (estado.historialAsistencias || []).filter(
@@ -2035,7 +2519,7 @@ function construirSeccionGraficosAsistenciaHTML(est, resumenPorMateria) {
 
     <div class="panel" style="margin-bottom:14px; border:1px solid #cbd5e1;">
       <div class="panel-title" style="margin-bottom:6px;">
-        <span>📐 Control del 75% de Asistencia por Materia (Cruce de Partes Diarios y Horario de Clases Dictadas)</span>
+        <span>Asistencia por Materia (75% mínimo)</span>
         <span class="badge ${totFaltas >= 28 ? 'badge-danger' : 'badge-grp'}">
           ${totFaltas >= 28 ? '🚨 ACTIVO POR SUPERAR 28 FALTAS (Res. 1650/24)' : 'ℹ️ Seguimiento Preventivo por Asignatura'}
         </span>
@@ -2141,12 +2625,13 @@ function renderVistaAlumno() {
   `;
 
   html += construirSeccionGraficosAsistenciaHTML(est, resumenPorMateria);
+  html += construirSeccionPendientesAlumnoHTML(est, esFam);
 
   if (!esFam) {
     html += `
       <div class="panel" style="background:#f8fafc; border:1px solid #93c5fd; margin-bottom:14px;">
         <div class="panel-title">
-          <span>🔐 Legajo Familiar: Acceso por DNI del Estudiante y Correo Oficial</span>
+          <span>Datos de Familia y Acceso</span>
         </div>
         <div class="form-grid">
           <div class="form-group">
@@ -2179,7 +2664,7 @@ function renderVistaAlumno() {
 
       <div class="panel" style="background:#eff6ff; border:1px solid #bfdbfe; margin-bottom:14px;">
         <div class="panel-title">
-          <span>📧 Emitir Notificación / Citación Oficial (Envío Automático por Email @abc.gob.ar y Portal Familias)</span>
+          <span>Notificaciones y Citaciones</span>
         </div>
         <div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px;">
           <button type="button" class="btn-outline" onclick="aplicarPlantillaNotificacionAlumno('10_FALTAS', ${est.filaHoja})">🔔 Plantilla 10 Faltas</button>
@@ -2227,7 +2712,7 @@ function renderVistaAlumno() {
       </div>
 
       <div class="report-config-card">
-        <strong style="font-size:13.5px; color:#15803d;">📲 Comunicado Individual Rápido (WhatsApp y Talón Imprimible Cuaderno)</strong>
+        <strong style="font-size:13.5px; color:#15803d;">Comunicado Individual (WhatsApp / Cuaderno)</strong>
         <div class="scope-pill-bar">
           <button type="button" class="scope-pill ${amb === 'TODO' ? 'active-TODO' : ''}" onclick="cambiarAmbitoInformeAlumno('TODO')">📋 Todo</button>
           <button type="button" class="scope-pill ${amb === 'TALLER' ? 'active-TALLER' : ''}" onclick="cambiarAmbitoInformeAlumno('TALLER')">🔧 Solo Taller</button>
@@ -2264,7 +2749,7 @@ function renderVistaAlumno() {
   html += `
     <div class="panel" style="margin-bottom:14px;">
       <div class="panel-title">
-        <span>📬 Bandeja de Comunicados y Citaciones (${notifsEst.length})</span>
+        <span>Historial de Comunicados (${notifsEst.length})</span>
       </div>
   `;
   if (notifsEst.length === 0) {
@@ -2297,6 +2782,7 @@ function renderVistaAlumno() {
   }
   html += `</div>`;
 
+  html += construirBannerMigracionDicFebHTML();
   const materiasOrdenadas = obtenerMateriasOrdenadasVisualmente();
   let mostroBannerTeoria = false;
   let mostroBannerTaller = false;
@@ -2325,7 +2811,7 @@ function renderVistaAlumno() {
       </div>
       <div class="grade-inputs-grid">`;
     SUB_CAMPOS.forEach(sc => {
-      const colHoja = mat.columnaInicio + sc.offset;
+      const colHoja = obtenerColumnaHojaSubCampo(mat, sc);
       const etiquetaCampo = (sc.key === "final") ? `${sc.label} (Auto)` : sc.label;
       html += `<div class="mini-field"><label>${etiquetaCampo}</label><div>${crearSelectorNotaHTML(est.filaHoja, colHoja, notasMat[sc.key], sc.tipo, sc.key, esResumenTaller, notasMat)}</div></div>`;
     });
@@ -2335,7 +2821,6 @@ function renderVistaAlumno() {
   cont.innerHTML = html;
 }
 
-/* ==================== MÓDULO DE ACTAS INSTITUCIONALES (DEC. 2299/11 Y RES. 1650/24) ==================== */
 let estadoGeneradorActa = {
   filaHojaAlumno: 0,         // Número de fila del alumno o "BLANCO" para plantilla vacía a mano
   tipoActa: "INASISTENCIAS", // INASISTENCIAS | INCOMPARECENCIA
@@ -2724,7 +3209,7 @@ function renderVistaActas() {
   cont.innerHTML = `
     <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:10px; background:#eff6ff; border:1px solid #bfdbfe; padding:10px 12px; border-radius:8px;">
       <div style="font-size:12.5px; color:#1e3a8a; font-weight:700;">
-        💡 Podés generar el acta con los datos de un estudiante o elegir <b>"📝 Acta en Blanco"</b> para imprimir copias vacías y completarlas a mano.
+        Seleccioná un estudiante o usá el formato en blanco para completar a mano.
       </div>
       <button type="button" class="btn-outline" style="border-color:#1e3a8a; color:#1e3a8a;" onclick="activarActaEnBlancoParaImprimir()">
         📝 Poner Acta en Blanco (Para llenar a mano)
@@ -2916,22 +3401,21 @@ async function eliminarActaGuardadaUI(idActa) {
   }
 }
 
-/* ==================== PLANILLA GENERAL COMPLETA Y GUARDADO REMOTO ==================== */
 function renderTablaCompleta() {
   const cont = document.getElementById("contenedorTablaCompleta");
   if (!cont) return;
   const mostrarTachados = document.getElementById("chkMostrarTachadosPlanilla")?.checked;
   const mats = obtenerMateriasOrdenadasVisualmente();
 
-  let html = `<table class="app-table"><thead><tr>
+  let html = construirBannerMigracionDicFebHTML() + `<table class="app-table"><thead><tr>
     <th rowspan="2">Ord</th><th rowspan="2">Estudiante</th><th rowspan="2">Grp</th><th rowspan="2">Acción</th>`;
   mats.forEach(m => {
     const esTal = esMateriaDeTaller(m);
     const bgHeader = esTal ? "background:#e8f0fe; color:#0d47a1;" : "background:#f1f5f9; color:#1e293b;";
-    html += `<th colspan="6" style="${bgHeader}">${esTal ? '🔧 ' : '📘 '}${m.nombre}</th>`;
+    html += `<th colspan="8" style="${bgHeader}">${esTal ? '🔧 ' : '📘 '}${m.nombre}</th>`;
   });
   html += `</tr><tr>`;
-  mats.forEach(() => { html += `<th>1°V</th><th>1°C</th><th>2°V</th><th>2°C</th><th>Int</th><th>Fin</th>`; });
+  mats.forEach(() => { html += `<th>1°V</th><th>1°C</th><th>2°V</th><th>2°C</th><th>Int1</th><th>Dic</th><th>Feb</th><th>Fin</th>`; });
   html += `</tr></thead><tbody>`;
 
   (estado.estudiantes || []).forEach(est => {
@@ -2989,7 +3473,7 @@ function guardarCeldaRemota(filaHoja, columnaHoja, selectElem) {
   if (aluLocal && aluLocal.notas) {
     (estado.materias || []).forEach(m => {
       SUB_CAMPOS.forEach(sc => {
-        if (m.columnaInicio + sc.offset === numCol) {
+        if (obtenerColumnaHojaSubCampo(m, sc) === numCol) {
           if (!aluLocal.notas[m.indice]) aluLocal.notas[m.indice] = {};
           aluLocal.notas[m.indice][sc.key] = val;
           matTocada = m;
@@ -3114,7 +3598,7 @@ async function eliminarMateriaActual() {
   const mat = (estado.materias || []).find(m => m.indice === idxMat);
   if (!mat) return;
 
-  const ok = confirm(`⚠️ ¿Seguro que querés ELIMINAR la materia "${mat.nombre}" y sus 6 columnas de calificaciones en Google Sheets?\n\nEsta acción no se puede deshacer.`);
+  const ok = confirm(`⚠️ ¿Seguro que querés ELIMINAR la materia "${mat.nombre}" y todas sus columnas de calificaciones en Google Sheets?\n\nEsta acción no se puede deshacer.`);
   if (!ok) return;
 
   try {

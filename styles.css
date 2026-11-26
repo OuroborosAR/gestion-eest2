@@ -32,7 +32,6 @@ body {
   min-height: 100vh;
 }
 
-/* MARCA DE AGUA INSTITUCIONAL TENUE DE FONDO */
 .watermark-school-bg {
   position: fixed;
   inset: 0;
@@ -56,7 +55,6 @@ main.container {
   z-index: 2;
 }
 
-/* PANTALLA DE CARGA INICIAL CON ESCUDO */
 .initial-loader-overlay {
   position: fixed;
   inset: 0;
@@ -125,7 +123,6 @@ main.container {
   line-height: 1.4;
 }
 
-/* PANTALLA DE LOGIN PROTEGIDA */
 .login-overlay-screen {
   position: fixed;
   inset: 0;
@@ -180,7 +177,6 @@ main.container {
   font-weight: 900;
 }
 
-/* ENCABEZADO SUPERIOR */
 .app-header {
   background: linear-gradient(135deg, #0f172a, #1e3a8a);
   color: #fff;
@@ -257,7 +253,6 @@ main.container {
   background: rgba(255,255,255,0.28);
 }
 
-/* NAVEGACIÓN DE 6 PESTAÑAS */
 .nav-tabs {
   display: grid;
   grid-template-columns: repeat(6, 1fr);
@@ -348,7 +343,6 @@ main.container {
   background: #fff;
 }
 
-/* CAJA DE ASISTENCIA DOCENTE POR MATERIA DEL DÍA (CÁLCULO 75%) */
 .prof-asist-box {
   margin-top: 12px;
   background: #f8fafc;
@@ -771,9 +765,15 @@ table.app-table th {
 
 .grade-inputs-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 6px;
   margin-top: 8px;
+}
+
+@media (max-width: 440px) {
+  .grade-inputs-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
 }
 
 .mini-field {
@@ -816,6 +816,13 @@ table.app-table th {
   background-color: #fee2e2 !important;
   color: #dc2626 !important;
   border-color: #fca5a5 !important;
+  font-weight: 800 !important;
+}
+
+.val-CI {
+  background-color: #fef3c7 !important;
+  color: #b45309 !important;
+  border-color: #fcd34d !important;
   font-weight: 800 !important;
 }
 
@@ -894,7 +901,6 @@ table.app-table th {
   border-color: #cbd5e1;
 }
 
-/* ==================== GRÁFICOS DE ASISTENCIA Y BANDEJA DE NOTIFICACIONES FAMILIAS ==================== */
 .charts-grid-box {
   display: grid;
   grid-template-columns: 270px 1fr;
@@ -996,7 +1002,29 @@ table.app-table th {
   margin-top: 5px;
 }
 
-/* TARJETAS DE NOTIFICACIONES Y CITACIONES */
+.pendiente-item-card {
+  background: #ffffff;
+  border: 1px solid #fed7aa;
+  border-left: 5px solid #ea580c;
+  border-radius: 8px;
+  padding: 9px 12px;
+  margin-bottom: 7px;
+  font-size: 12.5px;
+}
+
+.pendiente-item-card.pendiente-recursado {
+  border-color: #fca5a5;
+  border-left-color: #dc2626;
+  background: #fff5f5;
+}
+
+.pendiente-item-card.pendiente-acreditada {
+  border-color: #bbf7d0;
+  border-left-color: #16a34a;
+  background: #f0fdf4;
+  opacity: 0.92;
+}
+
 .notif-banner-pending {
   background: #fffbeb;
   border: 2px solid #f59e0b;
@@ -1019,7 +1047,6 @@ table.app-table th {
   background: #fffdf5;
 }
 
-/* VISTA PREVIA E IMPRESIÓN DE ACTAS OFICIALES A4 */
 .acta-preview-sheet {
   background: #ffffff;
   border: 1.5px solid #111;
@@ -1200,7 +1227,6 @@ table.app-table th {
   }
 }
 
-/* TALÓN IMPRIMIBLE PARA EL CUADERNO DE COMUNICADOS Y ACTAS */
 #printComunicadosRoot,
 #printActasRoot {
   display: none;
