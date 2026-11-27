@@ -1029,8 +1029,10 @@ async function editarDatosEstudiante(filaHoja) {
     return;
   }
 
-  const nuevoGrupo = prompt("Grupo:", est.grupo || "Grupo 1");
-  if (nuevoGrupo === null) return;
+  const grpActualNorm = typeof normalizarGrupoLetra === "function" ? normalizarGrupoLetra(est.grupo) : (est.grupo || "SIN ASIGNAR");
+  const nuevoGrupoRaw = prompt("Grupo por letra (Ej: A, E, GRUPO A, o dejar SIN ASIGNAR):", grpActualNorm);
+  if (nuevoGrupoRaw === null) return;
+  const nuevoGrupo = typeof normalizarGrupoLetra === "function" ? normalizarGrupoLetra(nuevoGrupoRaw) : nuevoGrupoRaw.trim().toUpperCase();
 
   try {
     mostrarToast("⏳ Actualizando datos del estudiante...");
@@ -1145,7 +1147,11 @@ function actualizarOpcionesTurnoGrupo(turnoForzado = "") {
   if (!sel) return;
   const valorPrevio = sel.value;
   const gruposSet = new Set();
-  (estado.estudiantes || []).forEach(e => { if (e.grupo) gruposSet.add(e.grupo.trim()); });
+  (estado.estudiantes || []).forEach(e => {
+    if (e.grupo && (typeof esGrupoSinAsignar !== "function" || !esGrupoSinAsignar(e.grupo))) {
+      gruposSet.add(typeof normalizarGrupoLetra === "function" ? normalizarGrupoLetra(e.grupo) : e.grupo.trim().toUpperCase());
+    }
+  });
 
   const todasOpciones = [
     { label: "TM - Teoría (Curso Completo)", value: "TM - Teoría|ALL" },
@@ -1301,7 +1307,10 @@ function renderListaAsistencia() {
           <div class="stu-info">
             <div class="stu-name">${est.orden}. ${est.nombre}</div>
             <div class="stu-meta">
-              <span class="badge badge-grp">${est.grupo || "Sin grupo"}</span>
+              ${(typeof esGrupoSinAsignar === "function" && esGrupoSinAsignar(est.grupo))
+                ? `<select class="sel-grupo-inline" title="Asignar grupo" onchange="asignarGrupoRapidoEstudiante(${est.filaHoja}, this.value)">${generarOpcionesGruposHTML("SIN ASIGNAR")}</select>`
+                : `<span class="badge badge-grp">${typeof normalizarGrupoLetra === "function" ? normalizarGrupoLetra(est.grupo) : est.grupo}</span>`
+              }
               <span class="badge ${claseBadgeFaltas}">${textoAlerta}</span>
             </div>
             <div class="stu-actions-inline">
@@ -4386,8 +4395,9 @@ async function abrirModalNuevoAlumno() {
   const nombreRaw = prompt("Apellido y Nombre:");
   if (!nombreRaw || !nombreRaw.trim()) return;
   const nombreLimpio = nombreRaw.replace(/^\d+[\.\-\)]\s*/, "").trim().toUpperCase();
-  const grupo = prompt("Grupo:", "Grupo 1");
-  if (grupo === null) return;
+  const grupoRaw = prompt("Grupo por letra (Ej: A, E, o dejar SIN ASIGNAR):", "SIN ASIGNAR");
+  if (grupoRaw === null) return;
+  const grupo = typeof normalizarGrupoLetra === "function" ? normalizarGrupoLetra(grupoRaw) : grupoRaw.trim().toUpperCase();
 
   const claveNombre = normalizarClaveNombreAlumno(nombreLimpio);
   const existente = (estado.estudiantes || []).find(

@@ -61,6 +61,37 @@ function escHtml(str) {
     .replace(/'/g, "&#39;");
 }
 
+const LETRAS_GRUPOS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
+
+function esGrupoSinAsignar(grp) {
+  const s = String(grp || "").trim().toUpperCase();
+  return !s || s === "SIN ASIGNAR" || s === "SIN GRUPO" || s === "-";
+}
+
+function normalizarGrupoLetra(grpRaw) {
+  const s = String(grpRaw || "").replace(/\s+/g, " ").trim().toUpperCase();
+  if (!s || s === "SIN ASIGNAR" || s === "SIN GRUPO" || s === "-") return "SIN ASIGNAR";
+  if (/^[A-Z]$/.test(s)) return "GRUPO " + s;
+  const m = s.match(/^(?:GRUPO|GR\.?)\s*([A-Z0-9]+)$/);
+  if (m && m[1]) return "GRUPO " + m[1];
+  return s;
+}
+
+function generarOpcionesGruposHTML(valorActual) {
+  const normVal = normalizarGrupoLetra(valorActual);
+  let html = `<option value="SIN ASIGNAR" ${normVal === "SIN ASIGNAR" ? "selected" : ""}>SIN ASIGNAR</option>`;
+  let encontrado = (normVal === "SIN ASIGNAR");
+  LETRAS_GRUPOS.forEach(l => {
+    const val = "GRUPO " + l;
+    if (normVal === val) encontrado = true;
+    html += `<option value="${val}" ${normVal === val ? "selected" : ""}>${val}</option>`;
+  });
+  if (!encontrado && normVal) {
+    html += `<option value="${escHtml(normVal)}" selected>${escHtml(normVal)}</option>`;
+  }
+  return html;
+}
+
 let sesionAuth = {
   usuario: localStorage.getItem("eest2_auth_user") || sessionStorage.getItem("eest2_auth_user") || "",
   token: sessionStorage.getItem("eest2_auth_token") || localStorage.getItem("eest2_auth_token") || ""
@@ -718,7 +749,7 @@ async function ejecutarCreacionNuevoCurso() {
       if (!limp) return;
       const partes = limp.split("|");
       const nombreAlu = (partes[0] || "").replace(/^\d+[\.\-\)]\s*/, "").trim().toUpperCase();
-      const grupoAlu = (partes[1] || "Grupo 1").trim();
+      const grupoAlu = normalizarGrupoLetra(partes[1] || "SIN ASIGNAR");
       if (nombreAlu) {
         const clave = typeof normalizarClaveNombreAlumno === "function"
           ? normalizarClaveNombreAlumno(nombreAlu)
@@ -777,6 +808,8 @@ function abrirModalConfigHorarioDesdeSelector() {
 
 function abrirModalCargaMasivaAlumnos() {
   document.getElementById("lblCursoLoteAlumnos").textContent = (estado.cursoActual || "").replace(/_/g, " ");
+  const selGrp = document.getElementById("loteGrupoDefault");
+  if (selGrp) selGrp.innerHTML = generarOpcionesGruposHTML("SIN ASIGNAR");
   document.getElementById("loteTextoEstudiantes").value = "";
   document.getElementById("modalCargaMasivaAlumnos").classList.add("open");
 }
@@ -787,7 +820,7 @@ function cerrarModalCargaMasivaAlumnos() {
 
 async function ejecutarCargaMasivaAlumnos() {
   const texto = document.getElementById("loteTextoEstudiantes").value.trim();
-  const grpDef = document.getElementById("loteGrupoDefault").value.trim() || "Grupo 1";
+  const grpDef = normalizarGrupoLetra(document.getElementById("loteGrupoDefault")?.value || "SIN ASIGNAR");
   if (!texto) {
     mostrarToast("⚠️ Pegá al menos un estudiante");
     return;
@@ -809,7 +842,7 @@ async function ejecutarCargaMasivaAlumnos() {
       .replace(/\s+/g, " ")
       .trim()
       .toUpperCase();
-    const grp = (partes[1] || grpDef).trim();
+    const grp = normalizarGrupoLetra(partes[1] || grpDef);
 
     if (nom) {
       const clave = normalizar(nom);
@@ -1461,7 +1494,7 @@ async function guardarHorarioEnGoogleSheet() {
     tt: document.getElementById("cfgPrecTT").value.trim() || "___________",
     tv: document.getElementById("cfgPrecTV").value.trim() || "___________"
   };
-  const sincronizarMat = document.getElementById("chkSincronizarMateriasPlanilla").checked;
+  const sincronizarMat = false;
 
   try {
     const resp = await fetch(scriptUrl, {
@@ -2041,5 +2074,141 @@ Se cargarán las nóminas ordenadas alfabéticamente y se registrarán las mater
     mostrarToast("Error en pase de año: " + err.message, 4500);
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = "Confirmar Pase de Año"; }
+  }
+}
+
+
+function abrirModalAsignarGrupos() {
+  const modal = document.getElementById("modalAsignarGrupos");
+  if (!modal) return;
+  const lbl = document.getElementById("lblCursoAsignarGrupos");
+  if (lbl) lbl.textContent = (estado.cursoActual || "").replace(/_/g, " ");
+
+  const selA = document.getElementById("selMitadGrupo1");
+  const selB = document.getElementById("selMitadGrupo2");
+  if (selA) selA.innerHTML = LETRAS_GRUPOS.map(l => `<option value="GRUPO ${l}" ${l === "A" ? "selected" : ""}>GRUPO ${l}</option>`).join("");
+  if (selB) selB.innerHTML = LETRAS_GRUPOS.map(l => `<option value="GRUPO ${l}" ${l === "B" ? "selected" : ""}>GRUPO ${l}</option>`).join("");
+
+  renderListaAsignarGrupos();
+  modal.classList.add("open");
+}
+
+function cerrarModalAsignarGrupos() {
+  const modal = document.getElementById("modalAsignarGrupos");
+  if (modal) modal.classList.remove("open");
+}
+
+function renderListaAsignarGrupos() {
+  const cont = document.getElementById("contenedorListaAsignarGrupos");
+  if (!cont) return;
+  const activos = (estado.estudiantes || []).filter(e => !esEstudianteTachado(e));
+  if (activos.length === 0) {
+    cont.innerHTML = `<p style="padding:12px; color:#64748b;">No hay estudiantes activos en este curso.</p>`;
+    return;
+  }
+
+  let html = "";
+  activos.forEach(est => {
+    const grpNorm = normalizarGrupoLetra(est.grupo);
+    html += `
+      <div class="assign-grp-row">
+        <div class="assign-grp-name"><strong>${est.orden}.</strong> ${escHtml(est.nombre)}</div>
+        <select class="assign-grp-select" data-fila="${est.filaHoja}" data-orig="${escHtml(grpNorm)}">
+          ${generarOpcionesGruposHTML(grpNorm)}
+        </select>
+      </div>
+    `;
+  });
+  cont.innerHTML = html;
+}
+
+function aplicarDivisionMitadGrupos() {
+  const g1 = document.getElementById("selMitadGrupo1")?.value || "GRUPO A";
+  const g2 = document.getElementById("selMitadGrupo2")?.value || "GRUPO B";
+  const selects = Array.from(document.querySelectorAll(".assign-grp-select"));
+  if (selects.length === 0) return;
+  const mitad = Math.ceil(selects.length / 2);
+  selects.forEach((sel, idx) => {
+    sel.value = idx < mitad ? g1 : g2;
+  });
+  mostrarToast(`Preasignado: primeros ${mitad} a ${g1} y resto a ${g2}. Tocá Guardar para confirmar.`);
+}
+
+async function guardarGruposMasivoEnSheets() {
+  const selects = Array.from(document.querySelectorAll(".assign-grp-select"));
+  const cambios = [];
+  selects.forEach(sel => {
+    const filaHoja = Number(sel.dataset.fila);
+    const nuevoGrp = normalizarGrupoLetra(sel.value);
+    const origGrp = normalizarGrupoLetra(sel.dataset.orig);
+    if (nuevoGrp !== origGrp) {
+      cambios.push({ filaHoja, nuevoGrp });
+    }
+  });
+
+  if (cambios.length === 0) {
+    cerrarModalAsignarGrupos();
+    mostrarToast("No hubo cambios de grupo");
+    return;
+  }
+
+  const btn = document.getElementById("btnGuardarGruposMasivo");
+  try {
+    if (btn) { btn.disabled = true; btn.textContent = `Guardando (${cambios.length})...`; }
+    for (const item of cambios) {
+      const resp = await fetch(scriptUrl, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({
+          accion: "actualizarCelda",
+          curso: estado.cursoActual,
+          filaHoja: item.filaHoja,
+          columnaHoja: 3,
+          valor: item.nuevoGrp
+        })
+      });
+      const json = await resp.json();
+      if (!json.ok) throw new Error(json.error);
+      const est = (estado.estudiantes || []).find(e => e.filaHoja === item.filaHoja);
+      if (est) est.grupo = item.nuevoGrp;
+    }
+
+    aplicarDatosRecibidos(estado, true);
+    cerrarModalAsignarGrupos();
+    mostrarToast(`✅ ${cambios.length} grupo(s) actualizado(s)`);
+  } catch (err) {
+    mostrarToast("⚠️ Error al guardar grupos: " + err.message, 4000);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "💾 Guardar Grupos"; }
+  }
+}
+
+async function asignarGrupoRapidoEstudiante(filaHoja, valorElegido) {
+  const nuevoGrp = normalizarGrupoLetra(valorElegido);
+  if (nuevoGrp === "SIN ASIGNAR") return;
+  const est = (estado.estudiantes || []).find(e => e.filaHoja === Number(filaHoja));
+  if (!est) return;
+
+  try {
+    mostrarToast(`⏳ Asignando ${nuevoGrp}...`);
+    const resp = await fetch(scriptUrl, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({
+        accion: "actualizarCelda",
+        curso: estado.cursoActual,
+        filaHoja: est.filaHoja,
+        columnaHoja: 3,
+        valor: nuevoGrp
+      })
+    });
+    const json = await resp.json();
+    if (!json.ok) throw new Error(json.error);
+
+    est.grupo = nuevoGrp;
+    aplicarDatosRecibidos(estado, true);
+    mostrarToast(`✅ ${est.nombre} ➔ ${nuevoGrp}`);
+  } catch (err) {
+    mostrarToast("⚠️ Error: " + err.message, 4000);
   }
 }
