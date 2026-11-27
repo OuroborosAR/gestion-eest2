@@ -1108,7 +1108,7 @@ function abrirModalConfigHorario() {
     const mod = inferirModalidadDesdeTurno(turno);
     const horNorm = typeof normalizarHorario24hs === "function" ? normalizarHorario24hs(b.horario || "07:30 A 09:30") : (b.horario || "07:30 A 09:30");
     const tObj = typeof parsearHorarioTextoATime === "function" ? parsearHorarioTextoATime(horNorm) : { inicio: "07:30", fin: "09:30" };
-    const esPreset = typeof esHorarioPredefinido === "function" ? esHorarioPredefinido(horNorm) : true;
+    const esPreset = typeof esHorarioPredefinido === "function" ? esHorarioPredefinido(horNorm, turno) : true;
 
     let grp = "TEORÍA";
     if (mod === "ED_FISICA") grp = "CURSO";
@@ -1195,34 +1195,21 @@ function sincronizarInputsEditorHorario() {
 }
 
 function construirOpcionesHorario24HTML(item) {
-  const turnoUp = String(item.turno || "").toUpperCase();
-  const ordenGrupos = turnoUp.indexOf("TV") !== -1
-    ? ["TV", "TT", "TM"]
-    : (turnoUp.indexOf("TT") !== -1 ? ["TT", "TM", "TV"] : ["TM", "TT", "TV"]);
-
-  const labels = {
-    TM: "🌅 Turno Mañana (24hs)",
-    TT: "☀️ Turno Tarde (24hs)",
-    TV: "🌙 Turno Vespertino (24hs)"
-  };
-
+  const presets = typeof obtenerPresetsParaTurno === "function"
+    ? obtenerPresetsParaTurno(item.turno)
+    : [];
   const horNorm = normalizarHorario24hs(item.horario);
   let matched = false;
   let html = "";
 
-  ordenGrupos.forEach(key => {
-    const lista = (HORARIOS_PREDEFINIDOS_EEST2 && HORARIOS_PREDEFINIDOS_EEST2[key]) || [];
-    html += `<optgroup label="${labels[key]}">`;
-    lista.forEach(p => {
-      const isSel = !item.esHorarioCustom && (p.val === horNorm);
-      if (isSel) matched = true;
-      html += `<option value="${p.val}" ${isSel ? "selected" : ""}>${p.lbl}</option>`;
-    });
-    html += `</optgroup>`;
+  presets.forEach(p => {
+    const isSel = !item.esHorarioCustom && (p.val === horNorm);
+    if (isSel) matched = true;
+    html += `<option value="${p.val}" ${isSel ? "selected" : ""}>${p.lbl}</option>`;
   });
 
-  const esCustom = item.esHorarioCustom || !matched;
-  html += `<option value="__CUSTOM__" ${esCustom ? "selected" : ""}>🕒 Personalizado (24hs)...</option>`;
+  const esCustom = item.esHorarioCustom || presets.length === 0 || !matched;
+  html += `<option value="__CUSTOM__" ${esCustom ? "selected" : ""}>🕒 Personalizado (24hs)</option>`;
   return html;
 }
 
@@ -1370,9 +1357,17 @@ function alCambiarTurnoEditorHorario(idx, nuevoTurno) {
     if (modAnterior !== "TALLER") item.materia = "";
   }
 
-  // Ajustar horario por defecto si el horario actual es de otro turno y no fue personalizado
-  if (!item.esHorarioCustom && typeof obtenerHorarioDefectoParaTurno === "function") {
+  const presetsNuevo = typeof obtenerPresetsParaTurno === "function" ? obtenerPresetsParaTurno(nuevoTurno) : [];
+  if (presetsNuevo.length === 0) {
+    item.esHorarioCustom = true;
     const defHor = obtenerHorarioDefectoParaTurno(nuevoTurno);
+    const tObj = parsearHorarioTextoATime(defHor);
+    item.horario = defHor;
+    item.horaInicio = tObj.inicio;
+    item.horaFin = tObj.fin;
+  } else if (!esHorarioPredefinido(item.horario, nuevoTurno)) {
+    item.esHorarioCustom = false;
+    const defHor = presetsNuevo[0].val;
     const tObj = parsearHorarioTextoATime(defHor);
     item.horario = defHor;
     item.horaInicio = tObj.inicio;
@@ -1392,7 +1387,7 @@ function renderFilasEditorHorario() {
   filasEditorHorarioTemp.forEach((item, idx) => {
     const mod = inferirModalidadDesdeTurno(item.turno);
     item.modalidad = mod;
-    const esCustom = item.esHorarioCustom || (typeof esHorarioPredefinido === "function" && !esHorarioPredefinido(item.horario));
+    const esCustom = item.esHorarioCustom || (typeof esHorarioPredefinido === "function" && !esHorarioPredefinido(item.horario, item.turno));
 
     let campoGrupoHTML = "";
     if (mod === "TEORIA") {
@@ -1475,7 +1470,7 @@ function agregarFilaEditorHorario(diaPorDefecto = "LUNES", tipoRapido = "TEORIA"
       horaInicio: tObj.inicio,
       horaFin: tObj.fin,
       horario: horUso,
-      esHorarioCustom: false,
+      esHorarioCustom: (typeof obtenerPresetsParaTurno === "function" && obtenerPresetsParaTurno(turnoUso).length === 0),
       turno: turnoUso,
       grupo: modUso === "TALLER" ? (gruposTaller[0] || "GRUPO A") : "TEORÍA",
       materia: "",
