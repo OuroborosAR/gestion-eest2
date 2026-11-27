@@ -1759,36 +1759,12 @@ function renderizarVistaSiCorresponde(nombre) {
   vistasSucias[nombre] = false;
 }
 
-function obtenerClaveCacheCurso(curso) {
-  const u = (sesionAuth.usuario || "").toLowerCase();
-  const c = cicloSeleccionado || "ACTIVO";
-  return `eest2_cache_${u}_${c}_${curso || "DEFAULT"}`;
-}
-
-function guardarCacheLocalCurso(data) {
-  try {
-    if (!data || !data.cursoActual || esRolFamiliaActual()) return;
-    localStorage.setItem(obtenerClaveCacheCurso(data.cursoActual), JSON.stringify({
-      ts: Date.now(),
-      data: data
-    }));
-  } catch (e) {}
-}
-
-function leerCacheLocalCurso(curso) {
-  try {
-    if (!curso) return null;
-    const raw = localStorage.getItem(obtenerClaveCacheCurso(curso));
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (!parsed || !parsed.data) return null;
-    // Válido hasta 12 horas para arranque instantáneo mientras sincroniza en segundo plano
-    if ((Date.now() - (parsed.ts || 0)) > 12 * 3600 * 1000) return null;
-    return parsed.data;
-  } catch (e) {
-    return null;
-  }
-}
+// Limpiar cualquier caché local vieja de cursos que haya quedado guardada
+try {
+  Object.keys(localStorage).forEach(k => {
+    if (k.indexOf("eest2_cache_") === 0) localStorage.removeItem(k);
+  });
+} catch (e) {}
 
 function mostrarVista(nombre) {
   if (esRolFamiliaActual()) {
@@ -1821,14 +1797,7 @@ function actualizarSubtituloHeader() {
 
 async function cargarDatosDesdeSheet(nombreCurso, mostrarSelectorInicial = false) {
   try {
-    const cacheado = leerCacheLocalCurso(nombreCurso);
-    if (cacheado) {
-      ocultarPantallaCargaInicial();
-      aplicarDatosRecibidos(cacheado, false);
-      document.getElementById("statusSubtitle").textContent = "⚡ Datos locales cargados • Sincronizando...";
-    } else {
-      document.getElementById("statusSubtitle").textContent = "Sincronizando con Google Sheets...";
-    }
+    document.getElementById("statusSubtitle").textContent = "Sincronizando con Google Sheets...";
     const resp = await fetch(scriptUrl, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
@@ -1991,7 +1960,6 @@ function aplicarDatosRecibidos(data, preservarSeleccionPantalla = false) {
     return;
   }
 
-  guardarCacheLocalCurso(data);
   marcarVistasSucias();
   renderizarVistaSiCorresponde(vistaActualApp || "asistencia");
   renderTarjetasCursosEnModal();
