@@ -1014,6 +1014,67 @@ function aplicarPlanCurricularANuevoCurso() {
   }
 }
 
+function inferirModalidadDesdeTurno(turnoStr) {
+  const up = String(turnoStr || "").toUpperCase();
+  if (up.indexOf("FÍSICA") !== -1 || up.indexOf("FISICA") !== -1) return "ED_FISICA";
+  if (up.indexOf("TALLER") !== -1) return "TALLER";
+  return "TEORIA";
+}
+
+function detectarGruposTallerDelCurso() {
+  const curso = estado.cursoActual || "";
+  if (typeof obtenerMapaGruposTallerCursos === "function") {
+    const mapa = obtenerMapaGruposTallerCursos();
+    if (curso && Array.isArray(mapa[curso]) && mapa[curso].length >= 2) {
+      return [normalizarGrupoLetra(mapa[curso][0]), normalizarGrupoLetra(mapa[curso][1])];
+    }
+  }
+
+  const encontrados = [];
+  const agregar = (gRaw) => {
+    const g = normalizarGrupoLetra(gRaw);
+    if (!esGrupoSinAsignar(g) && g !== "TEORÍA" && g !== "TEORIA" && g !== "TEO" && g !== "CURSO" && g !== "AMBOS" && !encontrados.includes(g)) {
+      encontrados.push(g);
+    }
+  };
+
+  // 1. Desde estudiantes cargados
+  (estado.estudiantes || []).forEach(e => { if (e.grupo) agregar(e.grupo); });
+
+  // 2. Desde bloques de taller ya guardados en el horario
+  const bloques = (estado.horarioParte && estado.horarioParte.bloques) || [];
+  bloques.forEach(b => {
+    if (String(b.modalidad || "").toUpperCase() === "TALLER" || b.esTaller) {
+      agregar(b.grupo);
+    }
+  });
+
+  if (encontrados.length >= 2) return [encontrados[0], encontrados[1]];
+  if (encontrados.length === 1) {
+    const letra1 = encontrados[0].replace(/^GRUPO\s*/i, "").trim();
+    const idxL = LETRAS_GRUPOS.indexOf(letra1);
+    const sigLetra = (idxL >= 0 && idxL < LETRAS_GRUPOS.length - 1) ? LETRAS_GRUPOS[idxL + 1] : "B";
+    return [encontrados[0], "GRUPO " + sigLetra];
+  }
+  return ["GRUPO A", "GRUPO B"];
+}
+
+function obtenerGruposTallerActivosEditor() {
+  const g1 = normalizarGrupoLetra(document.getElementById("cfgGrupoTaller1")?.value || "GRUPO A");
+  const g2 = normalizarGrupoLetra(document.getElementById("cfgGrupoTaller2")?.value || "GRUPO B");
+  return g1 === g2 ? [g1] : [g1, g2];
+}
+
+function alCambiarGruposTallerEditor() {
+  sincronizarInputsEditorHorario();
+  const g1 = normalizarGrupoLetra(document.getElementById("cfgGrupoTaller1")?.value || "GRUPO A");
+  const g2 = normalizarGrupoLetra(document.getElementById("cfgGrupoTaller2")?.value || "GRUPO B");
+  if (typeof guardarGruposTallerCursoLocal === "function") {
+    guardarGruposTallerCursoLocal(estado.cursoActual, g1, g2);
+  }
+  renderFilasEditorHorario();
+}
+
 function abrirModalConfigHorario() {
   const cursoLimpio = (estado.cursoActual || "Curso").replace(/_/g, " ");
   document.getElementById("lblCursoConfigHorario").textContent = cursoLimpio;
@@ -1035,21 +1096,38 @@ function abrirModalConfigHorario() {
     selAnio.value = aDet ? String(aDet) : (selEsp && selEsp.value === "CICLO_BASICO" ? "1" : "4");
   }
 
+  const [defG1, defG2] = detectarGruposTallerDelCurso();
+  const selG1 = document.getElementById("cfgGrupoTaller1");
+  const selG2 = document.getElementById("cfgGrupoTaller2");
+  if (selG1) selG1.innerHTML = LETRAS_GRUPOS.map(l => `<option value="GRUPO ${l}" ${("GRUPO " + l) === defG1 ? "selected" : ""}>GRUPO ${l}</option>`).join("");
+  if (selG2) selG2.innerHTML = LETRAS_GRUPOS.map(l => `<option value="GRUPO ${l}" ${("GRUPO " + l) === defG2 ? "selected" : ""}>GRUPO ${l}</option>`).join("");
+
   const bloquesActuales = (hp.bloques && hp.bloques.length > 0) ? hp.bloques : [];
   filasEditorHorarioTemp = bloquesActuales.map(b => {
-    const tObj = typeof parsearHorarioTextoATime === "function"
-      ? parsearHorarioTextoATime(b.horario)
-      : { inicio: "07:40", fin: "09:40" };
+    const turno = b.turno || (b.esTaller ? "TT - Taller" : "TT - Teoría");
+    const mod = inferirModalidadDesdeTurno(turno);
+    const horNorm = typeof normalizarHorario24hs === "function" ? normalizarHorario24hs(b.horario || "07:30 A 09:30") : (b.horario || "07:30 A 09:30");
+    const tObj = typeof parsearHorarioTextoATime === "function" ? parsearHorarioTextoATime(horNorm) : { inicio: "07:30", fin: "09:30" };
+    const esPreset = typeof esHorarioPredefinido === "function" ? esHorarioPredefinido(horNorm) : true;
+
+    let grp = "TEORÍA";
+    if (mod === "ED_FISICA") grp = "CURSO";
+    else if (mod === "TALLER") {
+      const gNorm = normalizarGrupoLetra(b.grupo);
+      grp = esGrupoSinAsignar(gNorm) || gNorm === "TEORÍA" || gNorm === "TEO" ? defG1 : gNorm;
+    }
+
     return {
       dia: b.dia || "LUNES",
-      horaInicio: tObj.inicio,
-      horaFin: tObj.fin,
-      horario: b.horario || "07:40 A 09:40",
-      turno: b.turno || "TM - Teoría",
-      grupo: b.grupo || "Teo",
+      horaInicio: tObj.inicio || "07:30",
+      horaFin: tObj.fin || "09:30",
+      horario: horNorm,
+      esHorarioCustom: !esPreset,
+      turno: turno,
+      grupo: grp,
       materia: b.materia || "",
       profesor: b.profesor || "",
-      modalidad: b.modalidad || "TEORIA"
+      modalidad: mod
     };
   });
 
@@ -1077,43 +1155,126 @@ function alCambiarPlanEditorHorario() {
 function sincronizarInputsEditorHorario() {
   const filasDOM = document.querySelectorAll(".schedule-editor-row");
   filasDOM.forEach((rowEl, idx) => {
-    if (!filasEditorHorarioTemp[idx]) return;
-    filasEditorHorarioTemp[idx].dia = rowEl.querySelector(".ed-dia").value;
-    const hIni = rowEl.querySelector(".ed-hora-ini")?.value || "";
-    const hFin = rowEl.querySelector(".ed-hora-fin")?.value || "";
-    filasEditorHorarioTemp[idx].horaInicio = hIni;
-    filasEditorHorarioTemp[idx].horaFin = hFin;
-    filasEditorHorarioTemp[idx].horario = typeof formatearHorarioDesdeTime === "function"
-      ? formatearHorarioDesdeTime(hIni, hFin)
-      : `${hIni} A ${hFin}`;
-    filasEditorHorarioTemp[idx].turno = rowEl.querySelector(".ed-turno").value;
-    filasEditorHorarioTemp[idx].grupo = rowEl.querySelector(".ed-grupo").value;
+    const item = filasEditorHorarioTemp[idx];
+    if (!item) return;
+    item.dia = rowEl.querySelector(".ed-dia")?.value || item.dia;
+    item.turno = rowEl.querySelector(".ed-turno")?.value || item.turno;
+    item.modalidad = inferirModalidadDesdeTurno(item.turno);
+
+    const selPreset = rowEl.querySelector(".ed-horario-preset");
+    if (selPreset && selPreset.value !== "__CUSTOM__") {
+      item.esHorarioCustom = false;
+      item.horario = selPreset.value;
+      const tObj = parsearHorarioTextoATime(selPreset.value);
+      item.horaInicio = tObj.inicio;
+      item.horaFin = tObj.fin;
+    } else {
+      item.esHorarioCustom = true;
+      const hIni = rowEl.querySelector(".ed-hora-ini-24")?.value || item.horaInicio || "07:30";
+      const hFin = rowEl.querySelector(".ed-hora-fin-24")?.value || item.horaFin || "09:30";
+      item.horaInicio = hIni;
+      item.horaFin = hFin;
+      item.horario = formatearHorarioDesdeTime(hIni, hFin);
+    }
+
+    if (item.modalidad === "TEORIA") {
+      item.grupo = "TEORÍA";
+    } else if (item.modalidad === "ED_FISICA") {
+      item.grupo = "CURSO";
+    } else {
+      const selGrp = rowEl.querySelector(".ed-grupo-sel");
+      if (selGrp) item.grupo = normalizarGrupoLetra(selGrp.value);
+    }
 
     const selMat = rowEl.querySelector(".ed-materia");
     if (selMat && selMat.value !== "__MANUAL__") {
-      filasEditorHorarioTemp[idx].materia = selMat.value;
+      item.materia = selMat.value;
     }
-    filasEditorHorarioTemp[idx].profesor = rowEl.querySelector(".ed-profesor").value;
-    filasEditorHorarioTemp[idx].modalidad = rowEl.querySelector(".ed-modalidad").value;
+    item.profesor = (rowEl.querySelector(".ed-profesor")?.value || "").toUpperCase();
   });
 }
 
-function construirOpcionesMateriaEditorHTML(valorActual) {
-  const norm = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toUpperCase();
+function construirOpcionesHorario24HTML(item) {
+  const turnoUp = String(item.turno || "").toUpperCase();
+  const ordenGrupos = turnoUp.indexOf("TV") !== -1
+    ? ["TV", "TT", "TM"]
+    : (turnoUp.indexOf("TT") !== -1 ? ["TT", "TM", "TV"] : ["TM", "TT", "TV"]);
+
+  const labels = {
+    TM: "🌅 Turno Mañana (24hs)",
+    TT: "☀️ Turno Tarde (24hs)",
+    TV: "🌙 Turno Vespertino (24hs)"
+  };
+
+  const horNorm = normalizarHorario24hs(item.horario);
+  let matched = false;
+  let html = "";
+
+  ordenGrupos.forEach(key => {
+    const lista = (HORARIOS_PREDEFINIDOS_EEST2 && HORARIOS_PREDEFINIDOS_EEST2[key]) || [];
+    html += `<optgroup label="${labels[key]}">`;
+    lista.forEach(p => {
+      const isSel = !item.esHorarioCustom && (p.val === horNorm);
+      if (isSel) matched = true;
+      html += `<option value="${p.val}" ${isSel ? "selected" : ""}>${p.lbl}</option>`;
+    });
+    html += `</optgroup>`;
+  });
+
+  const esCustom = item.esHorarioCustom || !matched;
+  html += `<option value="__CUSTOM__" ${esCustom ? "selected" : ""}>🕒 Personalizado (24hs)...</option>`;
+  return html;
+}
+
+function construirSelectHoras24HTML(valorSeleccionado) {
+  const valNorm = String(valorSeleccionado || "07:30").trim();
+  let encontrado = false;
+  let html = "";
+  (HORAS_24HS_LISTA || []).forEach(h => {
+    if (h === valNorm) encontrado = true;
+    html += `<option value="${h}" ${h === valNorm ? "selected" : ""}>${h}</option>`;
+  });
+  if (!encontrado && valNorm) {
+    html = `<option value="${escHtml(valNorm)}" selected>${escHtml(valNorm)}</option>` + html;
+  }
+  return html;
+}
+
+function construirOpcionesMateriaEditorHTML(valorActual, modalidadFiltro) {
+  const norm = (s) => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toUpperCase();
   const valTrim = String(valorActual || "").trim();
   const valNorm = norm(valTrim);
+  const modBuscada = String(modalidadFiltro || "TEORIA").toUpperCase();
 
   const selEsp = document.getElementById("cfgEspecialidadHorario")?.value || "ELECTROMECANICA";
   const selAnio = document.getElementById("cfgAnioHorario")?.value || "";
 
   const yaIncluidas = new Set();
   let matched = false;
-  let html = `<option value="">-- Elegir materia --</option>`;
+  let html = `<option value="">-- Elegir materia (${modBuscada === "TALLER" ? "Taller" : (modBuscada === "ED_FISICA" ? "Ed. Física" : "Teoría")}) --</option>`;
 
-  // 1. Materias ya cargadas en la planilla de este curso (evita duplicados)
-  const matsPlanilla = (estado.materias || []).filter(m => !m.esResumenTallerCB);
+  if (modBuscada === "ED_FISICA") {
+    const isSel = !valNorm || valNorm.indexOf("FISICA") !== -1;
+    if (isSel) matched = true;
+    html += `<option value="Educación Física" ${isSel ? "selected" : ""}>🏃 Educación Física</option>`;
+    if (valTrim && !matched) {
+      html += `<option value="${escHtml(valTrim)}" selected>${escHtml(valTrim)}</option>`;
+    }
+    html += `<option value="__MANUAL__">✏️ Otra materia (manual)...</option>`;
+    return html;
+  }
+
+  const coincideModalidadPlanilla = (matObj) => {
+    const nomUp = norm(matObj.nombre);
+    if (nomUp.indexOf("EDUCACION FISICA") !== -1) return false;
+    const esTal = typeof esMateriaDeTaller === "function" ? esMateriaDeTaller(matObj) : false;
+    return modBuscada === "TALLER" ? esTal : !esTal;
+  };
+
+  // 1. Materias de la planilla de este curso filtradas por Teoría o Taller
+  const matsPlanilla = (estado.materias || []).filter(m => !m.esResumenTallerCB && coincideModalidadPlanilla(m));
   if (matsPlanilla.length > 0) {
-    html += `<optgroup label="📋 Materias de la planilla de este curso">`;
+    html += `<optgroup label="📋 Planilla del curso (${modBuscada === "TALLER" ? "Taller" : "Teoría"})">`;
     matsPlanilla.forEach(m => {
       const nom = String(m.nombre || "").trim();
       const k = norm(nom);
@@ -1126,34 +1287,48 @@ function construirOpcionesMateriaEditorHTML(valorActual) {
     html += `</optgroup>`;
   }
 
-  // 2. Diseño Curricular Oficial (Anexo 3) para la especialidad y año elegidos
+  // 2. Diseño Curricular filtrado por Teoría o Taller
   if (typeof obtenerMateriasCatalogo === "function") {
-    const cat = obtenerMateriasCatalogo(selEsp, selAnio);
-    const restantes = cat.filter(c => !yaIncluidas.has(norm(c.nombre)));
-    if (restantes.length > 0) {
-      const espLbl = (CATALOGO_CURRICULAR_EEST2[selEsp]?.label || selEsp) + (selAnio ? ` — ${selAnio}° Año` : "");
+    const cat = obtenerMateriasCatalogo(selEsp, selAnio)
+      .filter(c => c.modalidad === modBuscada && !yaIncluidas.has(norm(c.nombre)));
+    if (cat.length > 0) {
+      const espLbl = (CATALOGO_CURRICULAR_EEST2[selEsp]?.label || selEsp) + (selAnio ? ` — ${selAnio}°` : "");
       html += `<optgroup label="📚 Diseño Curricular (${escHtml(espLbl)})">`;
-      restantes.forEach(c => {
+      cat.forEach(c => {
         const k = norm(c.nombre);
         yaIncluidas.add(k);
         const isSel = (!matched && k === valNorm);
         if (isSel) matched = true;
-        const ico = c.modalidad === "ED_FISICA" ? "🏃 " : (c.modalidad === "TALLER" ? "🔧 " : "📘 ");
-        html += `<option value="${escHtml(c.nombre)}" ${isSel ? "selected" : ""}>${ico}${escHtml(c.nombre)}</option>`;
+        html += `<option value="${escHtml(c.nombre)}" ${isSel ? "selected" : ""}>${escHtml(c.nombre)}</option>`;
       });
       html += `</optgroup>`;
     }
   }
 
-  // 3. Si el bloque ya tenía un nombre abreviado o distinto, conservarlo seleccionado para no perderlo
   if (valTrim && !matched) {
-    html += `<optgroup label="📝 Nombre actual del bloque">`;
+    html += `<optgroup label="📝 Nombre actual">`;
     html += `<option value="${escHtml(valTrim)}" selected>${escHtml(valTrim)}</option>`;
     html += `</optgroup>`;
   }
 
   html += `<option value="__MANUAL__">✏️ Otra materia (escribir manual)...</option>`;
   return html;
+}
+
+function alCambiarHorarioPresetEditor(idx, nuevoVal) {
+  sincronizarInputsEditorHorario();
+  const item = filasEditorHorarioTemp[idx];
+  if (!item) return;
+  if (nuevoVal === "__CUSTOM__") {
+    item.esHorarioCustom = true;
+  } else {
+    item.esHorarioCustom = false;
+    item.horario = nuevoVal;
+    const tObj = parsearHorarioTextoATime(nuevoVal);
+    item.horaInicio = tObj.inicio;
+    item.horaFin = tObj.fin;
+  }
+  renderFilasEditorHorario();
 }
 
 function alCambiarMateriaEditorHorario(idx, nuevoVal) {
@@ -1168,26 +1343,42 @@ function alCambiarMateriaEditorHorario(idx, nuevoVal) {
     }
   } else {
     item.materia = nuevoVal;
-    const selEsp = document.getElementById("cfgEspecialidadHorario")?.value || "ELECTROMECANICA";
-    const selAnio = document.getElementById("cfgAnioHorario")?.value || "";
-    const modCat = typeof buscarModalidadEnCatalogo === "function"
-      ? buscarModalidadEnCatalogo(nuevoVal, selEsp, selAnio)
-      : "";
-
-    if (modCat) {
-      item.modalidad = modCat;
-      if (modCat === "ED_FISICA") {
-        item.turno = "Educación Física";
-        item.grupo = "Curso";
-      } else if (modCat === "TALLER" && item.turno.toUpperCase().indexOf("TALLER") === -1) {
-        item.turno = "TT - Taller";
-        if (!item.grupo || item.grupo === "Teo") item.grupo = "Gr.1";
-      } else if (modCat === "TEORIA" && item.turno.toUpperCase().indexOf("TEOR") === -1) {
-        item.turno = "TT - Teoría";
-        item.grupo = "Teo";
-      }
-    }
   }
+  renderFilasEditorHorario();
+}
+
+function alCambiarTurnoEditorHorario(idx, nuevoTurno) {
+  sincronizarInputsEditorHorario();
+  const item = filasEditorHorarioTemp[idx];
+  if (!item) return;
+  const modAnterior = item.modalidad;
+  const nuevaMod = inferirModalidadDesdeTurno(nuevoTurno);
+  item.turno = nuevoTurno;
+  item.modalidad = nuevaMod;
+
+  if (nuevaMod === "ED_FISICA") {
+    item.materia = "Educación Física";
+    item.grupo = "CURSO";
+  } else if (nuevaMod === "TEORIA") {
+    item.grupo = "TEORÍA";
+    if (modAnterior !== "TEORIA") item.materia = "";
+  } else {
+    const gruposCurso = obtenerGruposTallerActivosEditor();
+    if (!gruposCurso.includes(normalizarGrupoLetra(item.grupo))) {
+      item.grupo = gruposCurso[0] || "GRUPO A";
+    }
+    if (modAnterior !== "TALLER") item.materia = "";
+  }
+
+  // Ajustar horario por defecto si el horario actual es de otro turno y no fue personalizado
+  if (!item.esHorarioCustom && typeof obtenerHorarioDefectoParaTurno === "function") {
+    const defHor = obtenerHorarioDefectoParaTurno(nuevoTurno);
+    const tObj = parsearHorarioTextoATime(defHor);
+    item.horario = defHor;
+    item.horaInicio = tObj.inicio;
+    item.horaFin = tObj.fin;
+  }
+
   renderFilasEditorHorario();
 }
 
@@ -1195,85 +1386,101 @@ function renderFilasEditorHorario() {
   const cont = document.getElementById("contenedorFilasEditorHorario");
   if (!cont) return;
 
+  const gruposTaller = obtenerGruposTallerActivosEditor();
   let html = "";
+
   filasEditorHorarioTemp.forEach((item, idx) => {
-    const hIni = item.horaInicio || (typeof parsearHorarioTextoATime === "function" ? parsearHorarioTextoATime(item.horario).inicio : "07:40");
-    const hFin = item.horaFin || (typeof parsearHorarioTextoATime === "function" ? parsearHorarioTextoATime(item.horario).fin : "09:40");
+    const mod = inferirModalidadDesdeTurno(item.turno);
+    item.modalidad = mod;
+    const esCustom = item.esHorarioCustom || (typeof esHorarioPredefinido === "function" && !esHorarioPredefinido(item.horario));
+
+    let campoGrupoHTML = "";
+    if (mod === "TEORIA") {
+      campoGrupoHTML = `<div class="ed-grupo-fixed ed-grp-teo" title="Materia de Teoría (curso completo)">📘 TEORÍA</div>`;
+    } else if (mod === "ED_FISICA") {
+      campoGrupoHTML = `<div class="ed-grupo-fixed ed-grp-ef" title="Educación Física (curso completo)">🏃 CURSO</div>`;
+    } else {
+      const grpActual = normalizarGrupoLetra(item.grupo);
+      const ops = [...gruposTaller];
+      if (grpActual && !esGrupoSinAsignar(grpActual) && grpActual !== "TEORÍA" && grpActual !== "TEO" && !ops.includes(grpActual)) {
+        ops.push(grpActual);
+      }
+      if (!ops.includes("AMBOS")) ops.push("AMBOS");
+      campoGrupoHTML = `
+        <select class="ed-grupo-sel" title="Grupo de Taller">
+          ${ops.map(g => `<option value="${escHtml(g)}" ${g === grpActual ? "selected" : ""}>🔧 ${escHtml(g)}</option>`).join("")}
+        </select>
+      `;
+    }
 
     html += `
-      <div class="schedule-editor-row">
+      <div class="schedule-editor-row ${mod === "TALLER" ? "ser-taller" : (mod === "ED_FISICA" ? "ser-ef" : "ser-teoria")}">
         <select class="ed-dia" title="Día">
           ${DIAS_SEMANA_ORDEN.map(d => `<option value="${d}" ${item.dia === d ? 'selected' : ''}>${d}</option>`).join("")}
         </select>
-        <div class="ed-time-range" title="Horario (Desde - Hasta)">
-          <input type="time" class="ed-hora-ini" value="${escHtml(hIni)}">
-          <span>a</span>
-          <input type="time" class="ed-hora-fin" value="${escHtml(hFin)}">
+        <div class="ed-horario-box">
+          <select class="ed-horario-preset" title="Horario (24hs)" onchange="alCambiarHorarioPresetEditor(${idx}, this.value)">
+            ${construirOpcionesHorario24HTML(item)}
+          </select>
+          ${esCustom ? `
+          <div class="ed-time-range-24">
+            <select class="ed-hora-ini-24" title="Hora inicio (24hs)">${construirSelectHoras24HTML(item.horaInicio)}</select>
+            <span>a</span>
+            <select class="ed-hora-fin-24" title="Hora fin (24hs)">${construirSelectHoras24HTML(item.horaFin)}</select>
+          </div>` : ""}
         </div>
-        <select class="ed-turno" title="Turno" onchange="alCambiarTurnoEditorHorario(${idx}, this.value)">
+        <select class="ed-turno" title="Turno y Modalidad" onchange="alCambiarTurnoEditorHorario(${idx}, this.value)">
           ${["TM - Teoría", "TT - Teoría", "TV - Teoría", "TM - Taller", "TT - Taller", "TT/TV - Taller", "TV - Taller", "Educación Física"]
             .map(t => `<option value="${t}" ${item.turno === t ? 'selected' : ''}>${t}</option>`).join("")}
         </select>
-        <input type="text" class="ed-grupo" placeholder="Teo / Gr.E" value="${escHtml(item.grupo || '')}">
+        ${campoGrupoHTML}
         <select class="ed-materia" title="Materia" onchange="alCambiarMateriaEditorHorario(${idx}, this.value)">
-          ${construirOpcionesMateriaEditorHTML(item.materia)}
+          ${construirOpcionesMateriaEditorHTML(item.materia, mod)}
         </select>
-        <input type="text" class="ed-profesor" placeholder="Apellido docente" value="${escHtml(item.profesor || '')}">
-        <select class="ed-modalidad" title="Modalidad">
-          <option value="TEORIA" ${(item.modalidad !== "TALLER" && item.modalidad !== "ED_FISICA") ? "selected" : ""}>📘 Teoría</option>
-          <option value="TALLER" ${item.modalidad === "TALLER" ? "selected" : ""}>🔧 Taller</option>
-          <option value="ED_FISICA" ${item.modalidad === "ED_FISICA" ? "selected" : ""}>🏃 Ed. Física</option>
-        </select>
-        <button type="button" class="btn-danger-outline" style="padding:5px;" onclick="eliminarFilaEditorHorario(${idx})">🗑️</button>
+        <input type="text" class="ed-profesor" placeholder="APELLIDO DOCENTE" value="${escHtml(item.profesor || '')}">
+        <button type="button" class="btn-danger-outline" style="padding:5px;" title="Eliminar bloque" onclick="eliminarFilaEditorHorario(${idx})">🗑️</button>
       </div>
     `;
   });
   cont.innerHTML = html || `<p style="padding:10px; color:#64748b; font-size:12px;">Sin bloques cargados. Tocá "+ Bloque Teoría/Taller" o "+ Ed. Física".</p>`;
 }
 
-function alCambiarTurnoEditorHorario(idx, nuevoTurno) {
-  sincronizarInputsEditorHorario();
-  const item = filasEditorHorarioTemp[idx];
-  if (!item) return;
-  item.turno = nuevoTurno;
-  const up = String(nuevoTurno || "").toUpperCase();
-  if (up.indexOf("FÍSICA") !== -1 || up.indexOf("FISICA") !== -1) {
-    item.modalidad = "ED_FISICA";
-    if (!item.materia) item.materia = "Educación Física";
-    if (!item.grupo || item.grupo === "Teo") item.grupo = "Curso";
-  } else if (up.indexOf("TALLER") !== -1) {
-    item.modalidad = "TALLER";
-  } else {
-    item.modalidad = "TEORIA";
-  }
-  renderFilasEditorHorario();
-}
-
 function agregarFilaEditorHorario(diaPorDefecto = "LUNES", tipoRapido = "TEORIA") {
   sincronizarInputsEditorHorario();
+  const ultimo = filasEditorHorarioTemp[filasEditorHorarioTemp.length - 1];
+  const diaUso = ultimo ? ultimo.dia : diaPorDefecto;
+
   if (tipoRapido === "ED_FISICA") {
     filasEditorHorarioTemp.push({
-      dia: diaPorDefecto,
+      dia: diaUso,
       horaInicio: "08:00",
       horaFin: "09:00",
       horario: "08:00 A 09:00",
+      esHorarioCustom: true,
       turno: "Educación Física",
-      grupo: "Curso",
+      grupo: "CURSO",
       materia: "Educación Física",
       profesor: "",
       modalidad: "ED_FISICA"
     });
   } else {
+    const turnoUso = ultimo && ultimo.modalidad !== "ED_FISICA" ? ultimo.turno : "TM - Teoría";
+    const modUso = inferirModalidadDesdeTurno(turnoUso);
+    const horUso = typeof obtenerHorarioDefectoParaTurno === "function" ? obtenerHorarioDefectoParaTurno(turnoUso) : "07:30 A 09:30";
+    const tObj = parsearHorarioTextoATime(horUso);
+    const gruposTaller = obtenerGruposTallerActivosEditor();
+
     filasEditorHorarioTemp.push({
-      dia: diaPorDefecto,
-      horaInicio: "07:40",
-      horaFin: "09:40",
-      horario: "07:40 A 09:40",
-      turno: "TM - Teoría",
-      grupo: "Teo",
+      dia: diaUso,
+      horaInicio: tObj.inicio,
+      horaFin: tObj.fin,
+      horario: horUso,
+      esHorarioCustom: false,
+      turno: turnoUso,
+      grupo: modUso === "TALLER" ? (gruposTaller[0] || "GRUPO A") : "TEORÍA",
       materia: "",
       profesor: "",
-      modalidad: "TEORIA"
+      modalidad: modUso
     });
   }
   renderFilasEditorHorario();
@@ -1529,21 +1736,78 @@ function mostrarToast(msg, duracion = 2800) {
   t._timer = setTimeout(() => { t.style.display = "none"; }, duracion);
 }
 
+let vistaActualApp = "asistencia";
+const vistasSucias = { asistencia: true, parte: true, materia: true, alumno: true, actas: true, planilla: true };
+
+function marcarVistasSucias(excluirVista = "") {
+  Object.keys(vistasSucias).forEach(k => {
+    if (k !== excluirVista) vistasSucias[k] = true;
+  });
+}
+
+function renderizarVistaSiCorresponde(nombre) {
+  if (nombre === "asistencia") {
+    if (typeof renderListaAsistencia === "function") renderListaAsistencia();
+    if (typeof renderTablaAcumuladoInasistencias === "function") renderTablaAcumuladoInasistencias();
+    if (typeof renderHistorialAsistencias === "function") renderHistorialAsistencias();
+  } else if (nombre === "parte") {
+    if (typeof pdRenderCurrentSelection === "function") pdRenderCurrentSelection();
+  } else if (nombre === "materia") {
+    if (typeof renderVistaMateria === "function") renderVistaMateria();
+  } else if (nombre === "alumno") {
+    if (typeof renderVistaAlumno === "function") renderVistaAlumno();
+  } else if (nombre === "actas") {
+    if (typeof renderVistaActas === "function") renderVistaActas();
+  } else if (nombre === "planilla") {
+    if (typeof renderTablaCompleta === "function") renderTablaCompleta();
+  }
+  vistasSucias[nombre] = false;
+}
+
+function obtenerClaveCacheCurso(curso) {
+  const u = (sesionAuth.usuario || "").toLowerCase();
+  const c = cicloSeleccionado || "ACTIVO";
+  return `eest2_cache_${u}_${c}_${curso || "DEFAULT"}`;
+}
+
+function guardarCacheLocalCurso(data) {
+  try {
+    if (!data || !data.cursoActual || esRolFamiliaActual()) return;
+    localStorage.setItem(obtenerClaveCacheCurso(data.cursoActual), JSON.stringify({
+      ts: Date.now(),
+      data: data
+    }));
+  } catch (e) {}
+}
+
+function leerCacheLocalCurso(curso) {
+  try {
+    if (!curso) return null;
+    const raw = localStorage.getItem(obtenerClaveCacheCurso(curso));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || !parsed.data) return null;
+    // Válido hasta 12 horas para arranque instantáneo mientras sincroniza en segundo plano
+    if ((Date.now() - (parsed.ts || 0)) > 12 * 3600 * 1000) return null;
+    return parsed.data;
+  } catch (e) {
+    return null;
+  }
+}
+
 function mostrarVista(nombre) {
   if (esRolFamiliaActual()) {
     nombre = "alumno";
   }
+  vistaActualApp = nombre;
   ["asistencia", "parte", "materia", "alumno", "actas", "planilla"].forEach(v => {
     const sec = document.getElementById(`vista-${v}`);
     const btn = document.getElementById(`tabBtn-${v}`);
     if (sec) sec.classList.toggle("hidden", v !== nombre);
     if (btn) btn.classList.toggle("active", v === nombre);
   });
-  if (nombre === "parte" && typeof pdRenderCurrentSelection === "function") {
-    pdRenderCurrentSelection();
-  }
-  if (nombre === "actas" && typeof renderVistaActas === "function") {
-    renderVistaActas();
+  if (vistasSucias[nombre] || nombre === "parte" || nombre === "actas") {
+    renderizarVistaSiCorresponde(nombre);
   }
 }
 
@@ -1562,7 +1826,14 @@ function actualizarSubtituloHeader() {
 
 async function cargarDatosDesdeSheet(nombreCurso, mostrarSelectorInicial = false) {
   try {
-    document.getElementById("statusSubtitle").textContent = "Sincronizando con Google Sheets...";
+    const cacheado = leerCacheLocalCurso(nombreCurso);
+    if (cacheado) {
+      ocultarPantallaCargaInicial();
+      aplicarDatosRecibidos(cacheado, false);
+      document.getElementById("statusSubtitle").textContent = "⚡ Datos locales cargados • Sincronizando...";
+    } else {
+      document.getElementById("statusSubtitle").textContent = "Sincronizando con Google Sheets...";
+    }
     const resp = await fetch(scriptUrl, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
@@ -1725,14 +1996,9 @@ function aplicarDatosRecibidos(data, preservarSeleccionPantalla = false) {
     return;
   }
 
-  if (typeof renderListaAsistencia === "function") renderListaAsistencia();
-  if (typeof renderTablaAcumuladoInasistencias === "function") renderTablaAcumuladoInasistencias();
-  if (typeof renderHistorialAsistencias === "function") renderHistorialAsistencias();
-  if (typeof renderVistaMateria === "function") renderVistaMateria();
-  if (typeof renderVistaAlumno === "function") renderVistaAlumno();
-  if (typeof renderVistaActas === "function") renderVistaActas();
-  if (typeof renderTablaCompleta === "function") renderTablaCompleta();
-  if (typeof pdRenderCurrentSelection === "function") pdRenderCurrentSelection();
+  guardarCacheLocalCurso(data);
+  marcarVistasSucias();
+  renderizarVistaSiCorresponde(vistaActualApp || "asistencia");
   renderTarjetasCursosEnModal();
   sincronizarSelectoresAppWA();
 }
@@ -2155,27 +2421,26 @@ async function guardarGruposMasivoEnSheets() {
   const btn = document.getElementById("btnGuardarGruposMasivo");
   try {
     if (btn) { btn.disabled = true; btn.textContent = `Guardando (${cambios.length})...`; }
-    for (const item of cambios) {
-      const resp = await fetch(scriptUrl, {
-        method: "POST",
-        headers: { "Content-Type": "text/plain;charset=utf-8" },
-        body: JSON.stringify({
-          accion: "actualizarCelda",
-          curso: estado.cursoActual,
-          filaHoja: item.filaHoja,
-          columnaHoja: 3,
-          valor: item.nuevoGrp
-        })
-      });
-      const json = await resp.json();
-      if (!json.ok) throw new Error(json.error);
-      const est = (estado.estudiantes || []).find(e => e.filaHoja === item.filaHoja);
-      if (est) est.grupo = item.nuevoGrp;
-    }
+    const resp = await fetch(scriptUrl, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({
+        accion: "actualizarCeldasLote",
+        curso: estado.cursoActual,
+        cambios: cambios.map(c => ({ filaHoja: c.filaHoja, columnaHoja: 3, valor: c.nuevoGrp }))
+      })
+    });
+    const json = await resp.json();
+    if (!json.ok) throw new Error(json.error);
+
+    cambios.forEach(c => {
+      const est = (estado.estudiantes || []).find(e => e.filaHoja === c.filaHoja);
+      if (est) est.grupo = c.nuevoGrp;
+    });
 
     aplicarDatosRecibidos(estado, true);
     cerrarModalAsignarGrupos();
-    mostrarToast(`✅ ${cambios.length} grupo(s) actualizado(s)`);
+    mostrarToast(`✅ ${cambios.length} grupo(s) guardados en 1 lote`);
   } catch (err) {
     mostrarToast("⚠️ Error al guardar grupos: " + err.message, 4000);
   } finally {

@@ -106,7 +106,11 @@ function construirDatosParteDinamico() {
     bloquesDia.forEach(b => {
       const esTal = String(b.modalidad || "").toUpperCase() === "TALLER" || Boolean(b.esTaller);
       const turnoCorto = (b.turno || "TT").split("-")[0].trim() || "TT";
-      const grp = (b.grupo || (esTal ? "Tal" : "Teo")).trim();
+      const grpRaw = String(b.grupo || (esTal ? "Tal" : "Teo")).trim();
+      const grpUp = grpRaw.toUpperCase();
+      let grp = grpRaw;
+      if (!esTal || grpUp === "TEORÍA" || grpUp === "TEORIA" || grpUp === "TEO") grp = "Teo";
+      else if (/^GRUPO\s+([A-Z0-9]+)$/i.test(grpUp)) grp = "Gr." + grpUp.replace(/^GRUPO\s+/i, "");
       const patLabel = `${turnoCorto}(${grp})`;
 
       if (!patShifts.includes(patLabel)) patShifts.push(patLabel);

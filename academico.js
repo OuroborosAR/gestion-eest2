@@ -4218,6 +4218,7 @@ function renderTablaCompleta() {
 
 const colaGuardadoCeldas = [];
 let procesandoColaCeldas = false;
+let timerDebounceCeldas = null;
 
 window.addEventListener("beforeunload", (e) => {
   if (procesandoColaCeldas || colaGuardadoCeldas.length > 0) {
@@ -4255,12 +4256,16 @@ function guardarCeldaRemota(filaHoja, columnaHoja, selectElem) {
       recalcularNotasEstudianteLocal(aluLocal, matTocada, scTocado.key);
     }
 
-    renderVistaMateria();
-    renderVistaAlumno();
-    renderTablaCompleta();
+    // Solo re-renderizar la pestaña visible (las ocultas se marcan sucias para no trabar el celular)
+    if (typeof guardarCacheLocalCurso === "function") guardarCacheLocalCurso(estado);
+    if (typeof marcarVistasSucias === "function" && typeof renderizarVistaSiCorresponde === "function") {
+      marcarVistasSucias(vistaActualApp);
+      renderizarVistaSiCorresponde(vistaActualApp);
+    } else {
+      renderVistaMateria();
+    }
   }
 
-  // Si ya hay un cambio pendiente en cola para esta misma celda, actualizamos su valor
   const idxExistente = colaGuardadoCeldas.findIndex(
     t => t.curso === cursoTarea && t.filaHoja === numFila && t.columnaHoja === numCol
   );
@@ -4275,64 +4280,68 @@ function guardarCeldaRemota(filaHoja, columnaHoja, selectElem) {
     });
   }
 
-  const pendientes = colaGuardadoCeldas.length + (procesandoColaCeldas ? 1 : 0);
   mostrarToast(
-    pendientes > 1 ? `⏳ Guardando (${pendientes} cambios en cola)...` : "⏳ Guardando...",
-    4000
+    colaGuardadoCeldas.length > 1 ? `⏳ Agrupando ${colaGuardadoCeldas.length} notas...` : "⏳ Guardando...",
+    3500
   );
 
-  procesarColaGuardadoCeldas();
+  // Agrupa varios cambios seguidos (450ms) para mandarlos juntos en 1 sola petición
+  clearTimeout(timerDebounceCeldas);
+  timerDebounceCeldas = setTimeout(() => {
+    procesarColaGuardadoCeldas();
+  }, 450);
 }
 
 async function procesarColaGuardadoCeldas() {
-  if (procesandoColaCeldas) return;
+  if (procesandoColaCeldas || colaGuardadoCeldas.length === 0) return;
   procesandoColaCeldas = true;
 
   let huboError = false;
 
   while (colaGuardadoCeldas.length > 0) {
-    const tarea = colaGuardadoCeldas.shift();
+    const cursoLote = colaGuardadoCeldas[0].curso;
+    const loteActual = [];
+    for (let i = 0; i < colaGuardadoCeldas.length; ) {
+      if (colaGuardadoCeldas[i].curso === cursoLote) {
+        loteActual.push(colaGuardadoCeldas.splice(i, 1)[0]);
+      } else {
+        i++;
+      }
+    }
 
     try {
       const resp = await fetch(scriptUrl, {
         method: "POST",
         headers: { "Content-Type": "text/plain;charset=utf-8" },
         body: JSON.stringify({
-          accion: "actualizarCelda",
-          curso: tarea.curso,
-          filaHoja: tarea.filaHoja,
-          columnaHoja: tarea.columnaHoja,
-          valor: tarea.valor
+          accion: "actualizarCeldasLote",
+          curso: cursoLote,
+          cambios: loteActual.map(t => ({ filaHoja: t.filaHoja, columnaHoja: t.columnaHoja, valor: t.valor }))
         })
       });
       const json = await resp.json();
       if (!json.ok) throw new Error(json.error);
 
-      // Solo aplicamos la respuesta de Sheets si NO quedan otros cambios en cola para esta misma fila
-      const quedanPendientesMismaFila = colaGuardadoCeldas.some(
-        t => t.curso === tarea.curso && t.filaHoja === tarea.filaHoja
-      );
-
-      if (
-        !quedanPendientesMismaFila &&
-        estado.cursoActual === tarea.curso &&
-        json.resultado &&
-        json.resultado.notasActualizadasFila
-      ) {
-        const aluLocal = (estado.estudiantes || []).find(e => e.filaHoja === tarea.filaHoja);
-        if (aluLocal) {
-          aluLocal.notas = json.resultado.notasActualizadasFila;
-          renderVistaMateria();
-          renderVistaAlumno();
-          renderTablaCompleta();
+      if (estado.cursoActual === cursoLote && json.resultado && json.resultado.notasPorFila) {
+        let huboCambioVisible = false;
+        Object.keys(json.resultado.notasPorFila).forEach(filaStr => {
+          const nf = Number(filaStr);
+          const quedaPend = colaGuardadoCeldas.some(t => t.curso === cursoLote && t.filaHoja === nf);
+          if (!quedaPend) {
+            const aluLocal = (estado.estudiantes || []).find(e => e.filaHoja === nf);
+            if (aluLocal) {
+              aluLocal.notas = json.resultado.notasPorFila[filaStr];
+              huboCambioVisible = true;
+            }
+          }
+        });
+        if (huboCambioVisible) {
+          if (typeof guardarCacheLocalCurso === "function") guardarCacheLocalCurso(estado);
+          if (typeof marcarVistasSucias === "function" && typeof renderizarVistaSiCorresponde === "function") {
+            marcarVistasSucias(vistaActualApp);
+            renderizarVistaSiCorresponde(vistaActualApp);
+          }
         }
-      }
-
-      if (colaGuardadoCeldas.length > 0) {
-        mostrarToast(
-          `⏳ Guardando (${colaGuardadoCeldas.length} pendiente${colaGuardadoCeldas.length > 1 ? "s" : ""})...`,
-          4000
-        );
       }
     } catch (err) {
       huboError = true;

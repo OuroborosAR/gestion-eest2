@@ -335,3 +335,84 @@ function buscarModalidadEnCatalogo(nombreMateria, especialidad, anio) {
   }
   return "";
 }
+
+
+const HORARIOS_PREDEFINIDOS_EEST2 = {
+  TM: [
+    { val: "07:30 A 09:30", lbl: "07:30 a 09:30 (1° y 2° — 2hs)" },
+    { val: "09:40 A 11:40", lbl: "09:40 a 11:40 (3° y 4° — 2hs)" },
+    { val: "11:50 A 12:50", lbl: "11:50 a 12:50 (5° hora — 1h)" },
+    { val: "07:30 A 10:40", lbl: "07:30 a 10:40 (1° a 3° — 3hs)" },
+    { val: "08:30 A 11:40", lbl: "08:30 a 11:40 (2° a 4° — 3hs)" },
+    { val: "09:40 A 12:50", lbl: "09:40 a 12:50 (3° a 5° — 3hs)" },
+    { val: "07:40 A 09:40", lbl: "07:40 a 09:40 (Taller TM 1°)" },
+    { val: "09:50 A 11:50", lbl: "09:50 a 11:50 (Taller TM 2°)" },
+    { val: "07:40 A 11:50", lbl: "07:40 a 11:50 (Taller TM Comp.)" }
+  ],
+  TT: [
+    { val: "13:00 A 15:00", lbl: "13:00 a 15:00 (1° y 2° — 2hs)" },
+    { val: "15:10 A 17:10", lbl: "15:10 a 17:10 (3° y 4° — 2hs)" },
+    { val: "17:15 A 18:15", lbl: "17:15 a 18:15 (5° hora — 1h)" },
+    { val: "13:00 A 16:10", lbl: "13:00 a 16:10 (1° a 3° — 3hs)" },
+    { val: "15:10 A 18:15", lbl: "15:10 a 18:15 (3° a 5° — 3hs)" },
+    { val: "14:00 A 16:00", lbl: "14:00 a 16:00 (Taller TT 1°)" },
+    { val: "16:15 A 18:15", lbl: "16:15 a 18:15 (Taller TT 2°)" },
+    { val: "14:00 A 18:15", lbl: "14:00 a 18:15 (Taller TT Comp.)" }
+  ],
+  TV: [
+    { val: "18:00 A 20:00", lbl: "18:00 a 20:00 (TV — 2hs)" },
+    { val: "18:20 A 20:20", lbl: "18:20 a 20:20 (TV — 2hs)" },
+    { val: "18:20 A 22:20", lbl: "18:20 a 22:20 (Taller TV Comp.)" },
+    { val: "17:30 A 21:30", lbl: "17:30 a 21:30 (Taller TV Comp.)" },
+    { val: "15:10 A 19:10", lbl: "15:10 a 19:10 (Taller TT/TV)" }
+  ]
+};
+
+const HORAS_24HS_LISTA = (() => {
+  const arr = [];
+  for (let h = 7; h <= 23; h++) {
+    for (let m = 0; m < 60; m += 5) {
+      if (h === 23 && m > 0) break;
+      arr.push(`${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`);
+    }
+  }
+  return arr;
+})();
+
+function normalizarHorario24hs(horarioStr) {
+  const t = parsearHorarioTextoATime(horarioStr);
+  return formatearHorarioDesdeTime(t.inicio, t.fin);
+}
+
+function esHorarioPredefinido(horarioStr) {
+  const norm = normalizarHorario24hs(horarioStr);
+  const todos = [
+    ...HORARIOS_PREDEFINIDOS_EEST2.TM,
+    ...HORARIOS_PREDEFINIDOS_EEST2.TT,
+    ...HORARIOS_PREDEFINIDOS_EEST2.TV
+  ];
+  return todos.some(p => p.val === norm);
+}
+
+function obtenerHorarioDefectoParaTurno(turnoStr) {
+  const up = String(turnoStr || "").toUpperCase();
+  if (up.indexOf("TV") !== -1) return "18:20 A 20:20";
+  if (up.indexOf("TT") !== -1) return up.indexOf("TALLER") !== -1 ? "14:00 A 16:00" : "13:00 A 15:00";
+  if (up.indexOf("FÍSICA") !== -1 || up.indexOf("FISICA") !== -1) return "08:00 A 09:00";
+  return up.indexOf("TALLER") !== -1 ? "07:40 A 09:40" : "07:30 A 09:30";
+}
+
+function obtenerMapaGruposTallerCursos() {
+  try {
+    return JSON.parse(localStorage.getItem("eest2_grupos_taller_cursos") || "{}");
+  } catch (e) {
+    return {};
+  }
+}
+
+function guardarGruposTallerCursoLocal(nombreCurso, g1, g2) {
+  if (!nombreCurso) return;
+  const mapa = obtenerMapaGruposTallerCursos();
+  mapa[nombreCurso] = [g1 || "GRUPO A", g2 || "GRUPO B"];
+  localStorage.setItem("eest2_grupos_taller_cursos", JSON.stringify(mapa));
+}

@@ -544,7 +544,7 @@
 
       <div class="form-grid" style="margin-bottom:10px; background:#eff6ff; padding:9px 10px; border-radius:8px; border:1px solid #bfdbfe;">
         <div class="form-group">
-          <label>Especialidad (Catálogo de Materias)</label>
+          <label>Especialidad (Catálogo)</label>
           <select id="cfgEspecialidadHorario" onchange="alCambiarPlanEditorHorario()">
             <option value="CICLO_BASICO">Ciclo Básico (1° a 3°)</option>
             <option value="ELECTROMECANICA">Electromecánica (4° a 7°)</option>
@@ -564,6 +564,14 @@
             <option value="6">6° Año</option>
             <option value="7">7° Año</option>
           </select>
+        </div>
+        <div class="form-group">
+          <label>Grupo Taller 1</label>
+          <select id="cfgGrupoTaller1" onchange="alCambiarGruposTallerEditor()"></select>
+        </div>
+        <div class="form-group">
+          <label>Grupo Taller 2</label>
+          <select id="cfgGrupoTaller2" onchange="alCambiarGruposTallerEditor()"></select>
         </div>
       </div>
 
