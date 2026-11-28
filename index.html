@@ -37,33 +37,182 @@
   <div id="loginOverlayScreen" class="login-overlay-screen">
     <div class="login-card-box">
       <img class="school-logo-eest2" alt="Escudo EEST N°2">
-      <h2 style="font-size:16px; font-weight:900; color:#0f172a;">E.E.S.T. N°2 de San Fernando</h2>
-      <p style="font-size:12px; color:#64748b; font-weight:700; margin-bottom:10px;">"Pbro. Dr. Manuel de San Ginés"<br>Sistema de Gestión Académica y Portal de Familias</p>
+      <h2 style="font-size:16.5px; font-weight:900; color:#0f172a;">E.E.S.T. N°2 de San Fernando</h2>
+      <p style="font-size:12px; color:#64748b; font-weight:700; margin-bottom:14px;">"Pbro. Dr. Manuel de San Ginés"</p>
 
-      <div style="background:#eff6ff; border:1px solid #bfdbfe; color:#1e3a8a; border-radius:8px; padding:8px 10px; font-size:11.5px; text-align:left; margin-bottom:12px; line-height:1.35;">
-        <strong>Familias:</strong> ingresá el <b>DNI del estudiante</b> (sin puntos) como usuario y contraseña.
+      <!-- PASO 1: BIENVENIDA Y SELECTOR DE PERFIL -->
+      <div id="loginStepWelcome">
+        <p style="font-size:13px; color:#334155; font-weight:700; margin-bottom:12px;">
+          Bienvenido/a. Elegí cómo querés ingresar:
+        </p>
+
+        <div class="welcome-role-grid">
+          <button type="button" class="welcome-role-btn role-btn-familia" onclick="seleccionarModoLogin('FAMILIA')">
+            <span class="wr-icon">👨‍👩‍👧</span>
+            <span class="wr-text">
+              <strong>Portal de Familias</strong>
+              <small>Asistencia, calificaciones y comunicados del estudiante</small>
+            </span>
+            <span class="wr-arrow">›</span>
+          </button>
+
+          <button type="button" class="welcome-role-btn role-btn-personal" onclick="seleccionarModoLogin('PERSONAL')">
+            <span class="wr-icon">🏫</span>
+            <span class="wr-text">
+              <strong>Personal de la Escuela</strong>
+              <small>Docentes, preceptores, EOE y equipo directivo</small>
+            </span>
+            <span class="wr-arrow">›</span>
+          </button>
+        </div>
       </div>
 
-      <div id="loginErrorBanner" style="display:none; background:#fee2e2; color:#b91c1c; padding:8px 10px; border-radius:8px; font-size:12px; font-weight:700; margin-bottom:12px;"></div>
+      <!-- PASO 2: FORMULARIO DE INGRESO SEGÚN PERFIL -->
+      <div id="loginStepForm" style="display:none;">
+        <div class="login-form-topbar">
+          <button type="button" class="btn-back-welcome" onclick="volverABienvenidaLogin()">← Volver</button>
+          <span id="loginModeBadge" class="login-mode-pill">Portal</span>
+        </div>
 
-      <div class="form-group" style="text-align:left; margin-bottom:10px;">
-        <label>Usuario o DNI del Estudiante</label>
-        <input type="text" id="authInputUser" placeholder="DNI del alumno (Familias) o Usuario (Personal)" autocomplete="username">
+        <div id="loginHintBox" class="login-hint-box" style="display:none;"></div>
+
+        <div id="loginErrorBanner" style="display:none; background:#fee2e2; color:#b91c1c; padding:8px 10px; border-radius:8px; font-size:12px; font-weight:700; margin-bottom:12px;"></div>
+
+        <div class="form-group" style="text-align:left; margin-bottom:10px;">
+          <label id="lblAuthInputUser">Usuario</label>
+          <input type="text" id="authInputUser" placeholder="Tu usuario" autocomplete="username">
+        </div>
+
+        <div class="form-group" style="text-align:left; margin-bottom:10px;">
+          <label id="lblAuthInputPass">Contraseña</label>
+          <input type="password" id="authInputPass" placeholder="Tu contraseña" autocomplete="current-password" onkeydown="if(event.key==='Enter') iniciarSesionSistema()">
+        </div>
+
+        <div style="display:flex; align-items:center; gap:6px; margin-bottom:14px; font-size:12px; color:#475569;">
+          <input type="checkbox" id="authChkRemember" checked style="width:16px; height:16px;">
+          <label for="authChkRemember" style="cursor:pointer; font-weight:700;">Recordar mi sesión en este dispositivo</label>
+        </div>
+
+        <button type="button" id="btnSubmitLogin" class="btn-main btn-print-blue" style="width:100%;" onclick="iniciarSesionSistema()">
+          Ingresar
+        </button>
+
+        <button type="button" class="btn-outline" style="width:100%; margin-top:8px; font-size:12px; color:#475569; border-color:#cbd5e1;" onclick="abrirRecuperarClaveLogin()">
+          🔑 ¿Olvidaste tu contraseña? Recuperarla por correo
+        </button>
+
+        <div id="boxLinkRegistroPersonal" style="display:none; margin-top:12px; padding-top:10px; border-top:1px solid #e2e8f0;">
+          <button type="button" class="btn-outline" style="width:100%; border-color:#93c5fd; color:#1e3a8a; font-weight:800;" onclick="abrirRegistroPersonalLogin()">
+            ✨ ¿Sos personal nuevo? Crear mi cuenta (@abc.gob.ar)
+          </button>
+        </div>
       </div>
 
-      <div class="form-group" style="text-align:left; margin-bottom:10px;">
-        <label>Contraseña o PIN</label>
-        <input type="password" id="authInputPass" placeholder="DNI del alumno o tu clave" autocomplete="current-password" onkeydown="if(event.key==='Enter') iniciarSesionSistema()">
+      <!-- PASO 3: AUTOREGISTRO DE PERSONAL CON @abc.gob.ar -->
+      <div id="loginStepRegister" style="display:none; text-align:left;">
+        <div class="login-form-topbar">
+          <button type="button" class="btn-back-welcome" onclick="volverALoginPersonalDesdeRegistro()">← Volver al Login</button>
+          <span class="login-mode-pill mode-personal">✨ Crear Cuenta Personal</span>
+        </div>
+
+        <div id="regErrorBanner" style="display:none; background:#fee2e2; color:#b91c1c; padding:8px 10px; border-radius:8px; font-size:12px; font-weight:700; margin-bottom:10px;"></div>
+
+        <div id="regSubStep1">
+          <div class="form-group" style="margin-bottom:8px;">
+            <label>DNI (sin puntos — será tu usuario)</label>
+            <input type="text" id="regInputDni" inputmode="numeric" placeholder="Ej: 35123456">
+          </div>
+          <div class="form-group" style="margin-bottom:8px;">
+            <label>Apellido y Nombre</label>
+            <input type="text" id="regInputNombre" placeholder="Ej: GÓMEZ, LAURA">
+          </div>
+          <div class="form-group" style="margin-bottom:8px;">
+            <label>Correo Institucional (@abc.gob.ar)</label>
+            <input type="email" id="regInputEmail" placeholder="tuusuario@abc.gob.ar">
+          </div>
+          <div class="form-group" style="margin-bottom:8px;">
+            <label>Contraseña (mínimo 6 caracteres)</label>
+            <input type="password" id="regInputPass" placeholder="Elegí una contraseña personal">
+          </div>
+          <div class="form-grid" style="margin-bottom:12px;">
+            <div class="form-group">
+              <label>Código de Sector</label>
+              <input type="text" id="regInputCod1" placeholder="Ej: DOC-EEST2">
+            </div>
+            <div class="form-group">
+              <label>2° Cargo (Opcional)</label>
+              <input type="text" id="regInputCod2" placeholder="Ej: PR-EEST2">
+            </div>
+          </div>
+          <button type="button" id="btnRegSolicitarPin" class="btn-main btn-print-blue" style="width:100%;" onclick="solicitarPinRegistroPersonal()">
+            📧 Enviar código de verificación a mi @abc.gob.ar
+          </button>
+        </div>
+
+        <div id="regSubStep2" style="display:none;">
+          <div style="background:#eff6ff; border:1px solid #bfdbfe; color:#1e3a8a; border-radius:8px; padding:10px; font-size:12px; margin-bottom:12px; line-height:1.4;">
+            Te enviamos un <b>código de 6 dígitos</b> a <strong id="regLblEmailEnviado"></strong>.<br>
+            Revisá tu casilla (o Correo no deseado) e ingresalo abajo:
+          </div>
+          <div class="form-group" style="margin-bottom:12px;">
+            <label>Código de Verificación (6 dígitos)</label>
+            <input type="text" id="regInputPin" inputmode="numeric" maxlength="6" placeholder="000000" style="text-align:center; font-size:20px; letter-spacing:6px;">
+          </div>
+          <button type="button" id="btnRegConfirmarPin" class="btn-main btn-w4b" style="width:100%;" onclick="confirmarPinRegistroPersonal()">
+            ✅ Confirmar y Activar mi Cuenta
+          </button>
+          <button type="button" class="btn-outline" style="width:100%; margin-top:8px;" onclick="document.getElementById('regSubStep2').style.display='none'; document.getElementById('regSubStep1').style.display='block';">
+            Corregir datos / Reenviar código
+          </button>
+        </div>
       </div>
 
-      <div style="display:flex; align-items:center; gap:6px; margin-bottom:14px; font-size:12px; color:#475569;">
-        <input type="checkbox" id="authChkRemember" checked style="width:16px; height:16px;">
-        <label for="authChkRemember" style="cursor:pointer; font-weight:700;">Recordar mi sesión en este dispositivo</label>
-      </div>
+      <!-- PASO 4: RECUPERACIÓN DE CONTRASEÑA POR CORREO -->
+      <div id="loginStepRecover" style="display:none; text-align:left;">
+        <div class="login-form-topbar">
+          <button type="button" class="btn-back-welcome" onclick="volverALoginDesdeRecuperar()">← Volver al Login</button>
+          <span class="login-mode-pill mode-personal">🔑 Recuperar Clave</span>
+        </div>
 
-      <button type="button" id="btnSubmitLogin" class="btn-main btn-print-blue" style="width:100%;" onclick="iniciarSesionSistema()">
-        Ingresar
-      </button>
+        <div id="recErrorBanner" style="display:none; background:#fee2e2; color:#b91c1c; padding:8px 10px; border-radius:8px; font-size:12px; font-weight:700; margin-bottom:10px;"></div>
+
+        <div id="recSubStep1">
+          <p style="font-size:12px; color:#475569; margin-bottom:10px; line-height:1.4;">
+            Ingresá tu <b>usuario, DNI o correo registrado</b> y te enviaremos un código de 6 dígitos para crear una nueva contraseña.
+          </p>
+          <div class="form-group" style="margin-bottom:12px;">
+            <label>Usuario, DNI o Correo electrónico</label>
+            <input type="text" id="recInputId" placeholder="Ej: 35123456 o usuario@abc.gob.ar" onkeydown="if(event.key==='Enter') solicitarPinRecuperarClave()">
+          </div>
+          <button type="button" id="btnRecSolicitarPin" class="btn-main btn-print-blue" style="width:100%;" onclick="solicitarPinRecuperarClave()">
+            📧 Enviar código de recuperación
+          </button>
+        </div>
+
+        <div id="recSubStep2" style="display:none;">
+          <div style="background:#eff6ff; border:1px solid #bfdbfe; color:#1e3a8a; border-radius:8px; padding:10px; font-size:12px; margin-bottom:10px; line-height:1.4;">
+            Enviamos un <b>código de 6 dígitos</b> a <strong id="recLblEmailMask"></strong>. Revisá también <i>Correo no deseado</i>.
+          </div>
+          <div class="form-group" style="margin-bottom:8px;">
+            <label>Código de 6 dígitos</label>
+            <input type="text" id="recInputPin" inputmode="numeric" maxlength="6" placeholder="000000" style="text-align:center; font-size:20px; letter-spacing:6px;">
+          </div>
+          <div class="form-group" style="margin-bottom:8px;">
+            <label>Nueva contraseña (mínimo 6 caracteres)</label>
+            <input type="password" id="recInputPass1" placeholder="Elegí tu nueva contraseña" autocomplete="new-password">
+          </div>
+          <div class="form-group" style="margin-bottom:12px;">
+            <label>Repetir nueva contraseña</label>
+            <input type="password" id="recInputPass2" placeholder="Repetí la contraseña" autocomplete="new-password" onkeydown="if(event.key==='Enter') confirmarPinRecuperarClave()">
+          </div>
+          <button type="button" id="btnRecConfirmar" class="btn-main btn-w4b" style="width:100%;" onclick="confirmarPinRecuperarClave()">
+            ✅ Guardar Nueva Contraseña
+          </button>
+          <button type="button" class="btn-outline" style="width:100%; margin-top:8px;" onclick="document.getElementById('recSubStep2').style.display='none'; document.getElementById('recSubStep1').style.display='block';">
+            Reenviar código / Cambiar usuario
+          </button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -83,6 +232,8 @@
         </span>
         <button class="btn-icon" onclick="abrirModalCiclosLectivos()" id="btnAdminCiclos" style="display:none; background:#0f766e;" title="Ciclos Lectivos y Pase de Año">📅 Ciclos</button>
         <button class="btn-icon" onclick="abrirModalGestionUsuarios()" id="btnAdminUsuarios" style="display:none; background:#4f46e5;" title="Administrar Usuarios y Roles">👥 Usuarios</button>
+        <button class="btn-icon staff-only-ctrl" id="btnMisAsignaciones" onclick="abrirModalMisAsignaciones()" style="display:none; background:#0369a1;" title="Mis cursos, materias y segundo rol">🎯 Mis Cargos</button>
+        <button class="btn-icon" onclick="abrirModalAyuda()" style="background:#0284c7;" title="Guías de uso por rol y Régimen Académico (DGCyE)">❓ Ayuda</button>
         <button class="btn-icon" onclick="cambiarMiPropiaClavePrompt()" title="Cambiar mi contraseña o PIN">🔑 Clave</button>
         <button class="btn-icon" onclick="instalarPWA()" id="btnInstalarPWA" style="display:none;" title="Instalar App en el Celular">📲 Instalar App</button>
         <button class="btn-icon staff-only-ctrl" id="btnHeaderCursosModal" onclick="abrirModalSelectorCurso(false)" title="Seleccionar, Crear o Eliminar Curso">🏫 Cursos</button>
@@ -121,7 +272,7 @@
     <section id="vista-asistencia">
       <div class="panel">
         <div class="panel-title">
-          <span>Asistencia Diaria</span>
+          <span>Asistencia Diaria <button type="button" class="info-norm-btn" onclick="mostrarInfoNormativa('asistencia_computo')" title="Ver regla DGCyE de cómputo de asistencia">ℹ️</button></span>
           <button class="btn-outline" onclick="marcarTodosPresentes()">✔️ Todos Presentes</button>
         </div>
 
@@ -323,7 +474,7 @@
     <section id="vista-materia" class="hidden">
       <div class="panel">
         <div class="panel-title">
-          <span>Calificaciones por Materia</span>
+          <span>Calificaciones por Materia <button type="button" class="info-norm-btn" onclick="mostrarInfoNormativa('calificaciones_ra')" title="Ver regla DGCyE de valoraciones y calificaciones">ℹ️</button></span>
           <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
             <label style="font-size:11.5px; color:#475569; display:flex; align-items:center; gap:4px; cursor:pointer;">
               <input type="checkbox" id="chkMostrarTachadosMateria" onchange="renderVistaMateria()">
@@ -385,6 +536,7 @@
     </section>
     <div id="printComunicadosRoot"></div>
     <div id="printActasRoot"></div>
+    <div id="printAyudaRoot"></div>
 
   </main>
   <div id="modalGestionUsuarios" class="modal-backdrop">
@@ -410,13 +562,33 @@
             <input type="text" id="usrFormNombre" placeholder="Ej: LAREU SILVANA">
           </div>
           <div class="form-group">
-            <label>Rol en la Escuela</label>
+            <label>Rol Principal</label>
             <select id="usrFormRol" onchange="actualizarVisibilidadCursosPreceptor()">
-              <option value="PRECEPTOR">PRECEPTOR/A (Por cursos)</option>
-              <option value="DIRECTIVO">DIRECTIVO (Acceso Total)</option>
-              <option value="ADMIN">ADMINISTRADOR (Acceso Total)</option>
+              <option value="PRECEPTOR">PRECEPTOR/A (Sus cursos)</option>
+              <option value="DOCENTE">DOCENTE (Sus materias)</option>
+              <option value="EOE">EOE / Trayectorias (Consulta + Actas)</option>
+              <option value="SECRETARIA">SECRETARÍA (Matrícula y legajos)</option>
+              <option value="JEFE_PR">JEFA DE PRECEPTORES (Todos los cursos)</option>
+              <option value="DIRECTIVO">DIRECTIVO (Gestión Total)</option>
+              <option value="ADMIN">ADMINISTRADOR (Gestión Total)</option>
               <option value="FAMILIA">FAMILIA (Vinculado desde Ficha Alumno)</option>
             </select>
+          </div>
+          <div class="form-group">
+            <label>2° Rol (Opcional — máx. 2)</label>
+            <select id="usrFormRolSec" onchange="actualizarVisibilidadCursosPreceptor()">
+              <option value="">Ninguno</option>
+              <option value="DOCENTE">DOCENTE</option>
+              <option value="PRECEPTOR">PRECEPTOR/A</option>
+              <option value="EOE">EOE / Trayectorias</option>
+              <option value="SECRETARIA">SECRETARÍA</option>
+              <option value="JEFE_PR">JEFA DE PRECEPTORES</option>
+              <option value="DIRECTIVO">DIRECTIVO</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Email @abc.gob.ar (Opcional)</label>
+            <input type="email" id="usrFormEmailAbc" placeholder="usuario@abc.gob.ar">
           </div>
         </div>
 
@@ -441,7 +613,18 @@
         <h3 style="font-size:13.5px; color:#0f172a;">Registro de Auditoría (Últimos accesos y cambios)</h3>
         <button type="button" class="btn-outline" onclick="cargarAuditoriaSeguridadUI()">Actualizar</button>
       </div>
-      <div class="table-wrap" id="contenedorTablaAuditoria" style="max-height:28vh; overflow-y:auto;"></div>
+      <div class="table-wrap" id="contenedorTablaAuditoria" style="max-height:24vh; overflow-y:auto; margin-bottom:16px;"></div>
+
+      <div style="background:#eff6ff; border:1px solid #bfdbfe; border-radius:8px; padding:12px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:8px;">
+          <h3 style="font-size:13.5px; color:#1e3a8a;">🔑 Códigos de Autoregistro por Sector (@abc.gob.ar)</h3>
+          <button type="button" id="btnGuardarCodigosAcceso" class="btn-main btn-print-blue" style="padding:6px 12px; font-size:12px;" onclick="guardarCodigosAccesoUI()">💾 Guardar Códigos</button>
+        </div>
+        <p style="font-size:11.5px; color:#475569; margin-bottom:8px;">
+          Compartí cada código solo con su sector. Si alguno se filtra, cambialo acá y guardá (las cuentas ya creadas siguen funcionando normal).
+        </p>
+        <div id="contenedorCodigosAccesoAdmin"></div>
+      </div>
     </div>
   </div>
   <div id="modalSelectorCurso" class="modal-backdrop">
@@ -452,9 +635,59 @@
       </div>
 
       <div id="seccionSeleccionarCursoExistente">
-        <p style="font-size:12.5px; color:#475569; margin-bottom:10px;">
-          Seleccioná un curso o creá uno nuevo:
-        </p>
+        <div class="course-nav-bar">
+          <div class="course-nav-top">
+            <input type="text" id="cursoNavSearch" class="course-nav-search" placeholder="🔎 Buscar curso (ej: 1ro 5ta, 5 6, naval)..." oninput="alCambiarBusquedaCursos(this.value)">
+            <span id="cursoNavCount" class="course-nav-count">0 cursos</span>
+          </div>
+          <div id="cursoNavModalidadChips" class="course-nav-chips"></div>
+          <div id="cursoNavAnioChips" class="course-nav-chips course-nav-chips-anio"></div>
+        </div>
+
+        <div id="panelClasificarCursoModal" class="course-classify-panel hidden">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+            <strong style="font-size:13px; color:#1e3a8a;">🏷️ Clasificar curso: <span id="clsCursoNombreLbl"></span></strong>
+            <button type="button" class="btn-outline" style="padding:3px 8px; font-size:11px;" onclick="cerrarClasificadorCursoModal()">✖</button>
+          </div>
+          <div class="form-grid">
+            <div class="form-group">
+              <label>Modalidad / Ciclo</label>
+              <select id="clsCursoModalidad" onchange="alCambiarModalidadClasificador()">
+                <option value="CICLO_BASICO">📘 Ciclo Básico (1° a 3°)</option>
+                <option value="ELECTROMECANICA">⚡ Electromecánica (4° a 7°)</option>
+                <option value="ALIMENTOS">🧪 Tecnología de los Alimentos (4° a 7°)</option>
+                <option value="NAVAL">⚓ Constructor Naval (4° a 7°)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Año</label>
+              <select id="clsCursoAnio">
+                <option value="1">1° Año</option>
+                <option value="2">2° Año</option>
+                <option value="3">3° Año</option>
+                <option value="4">4° Año</option>
+                <option value="5">5° Año</option>
+                <option value="6">6° Año</option>
+                <option value="7">7° Año</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Grupo Taller 1</label>
+              <select id="clsCursoGrupo1"></select>
+            </div>
+            <div class="form-group">
+              <label>Grupo Taller 2</label>
+              <select id="clsCursoGrupo2"></select>
+            </div>
+          </div>
+          <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:10px;">
+            <button type="button" class="btn-outline" onclick="cerrarClasificadorCursoModal()">Cancelar</button>
+            <button type="button" id="btnGuardarClasificacionCurso" class="btn-main btn-print-blue" style="padding:7px 14px; font-size:12px;" onclick="guardarClasificacionCursoModal()">
+              💾 Guardar Clasificación
+            </button>
+          </div>
+        </div>
+
         <div id="gridCursosDisponibles" class="course-cards-grid"></div>
 
         <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:space-between; border-top:1px solid #e2e8f0; padding-top:12px;">
@@ -474,7 +707,7 @@
           <div class="form-grid">
             <div class="form-group">
               <label>Nombre del Curso (Ej: 1ro_8va o 3ro_2da)</label>
-              <input type="text" id="ncNombreCurso" placeholder="Ej: 1ro_8va">
+              <input type="text" id="ncNombreCurso" placeholder="Ej: 1ro_8va o 4to_2da" oninput="alEscribirNombreNuevoCurso(this.value)">
             </div>
             <div class="form-group">
               <label>Preceptor/a Turno Mañana (TM)</label>
@@ -512,6 +745,14 @@
                 <option value="6">6° Año</option>
                 <option value="7">7° Año</option>
               </select>
+            </div>
+            <div class="form-group">
+              <label>Grupo Taller 1</label>
+              <select id="ncGrupoTaller1"></select>
+            </div>
+            <div class="form-group">
+              <label>Grupo Taller 2</label>
+              <select id="ncGrupoTaller2"></select>
             </div>
           </div>
 
@@ -778,10 +1019,93 @@
     </div>
   </div>
 
+  <div id="modalMisAsignaciones" class="modal-backdrop">
+    <div class="modal-box" style="max-width:700px;">
+      <div class="modal-header">
+        <h2>🎯 Mis Cargos, Cursos y Materias</h2>
+        <button class="btn-outline" onclick="cerrarModalMisAsignaciones()">✖ Cerrar</button>
+      </div>
+
+      <div id="misAsigResumenRoles" style="background:#f8fafc; border:1px solid #cbd5e1; border-radius:8px; padding:10px 12px; margin-bottom:12px; font-size:12.5px;"></div>
+
+      <div id="misAsigBoxSegundoRol" style="display:none; background:#eff6ff; border:1px solid #bfdbfe; border-radius:8px; padding:10px 12px; margin-bottom:12px;">
+        <strong style="font-size:12.5px; color:#1e3a8a; display:block; margin-bottom:6px;">➕ Sumar un 2° cargo (máximo 2 roles por persona)</strong>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <input type="text" id="misAsigCodigoRol2" placeholder="Código del 2° sector (ej: DOC-EEST2 o PR-EEST2)" style="flex:1; min-width:180px; padding:7px 10px; border:1px solid #cbd5e1; border-radius:6px; font-weight:700;">
+        </div>
+      </div>
+
+      <div id="misAsigBoxPreceptor" style="display:none; background:#f0fdf4; border:1px solid #86efac; border-radius:8px; padding:10px 12px; margin-bottom:12px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px; margin-bottom:6px;">
+          <strong style="font-size:12.5px; color:#15803d;">📋 Cursos asignados como Preceptor/a</strong>
+          <button type="button" class="btn-outline" style="padding:4px 9px; font-size:11.5px; border-color:#16a34a; color:#15803d;" onclick="sincronizarMisAsignacionesDesdeHorariosUI()">
+            🔄 Sincronizar desde Horarios
+          </button>
+        </div>
+        <p style="font-size:11.5px; color:#166534; margin-bottom:8px; line-height:1.35;">
+          Tus cursos se detectan automáticamente según la nómina de preceptores de cada curso (Apellido + inicial o nombre completo). Si falta algún curso, solicitalo a Jefatura de Preceptores o Dirección.
+        </p>
+        <div id="misAsigListaCursosPR" style="display:flex; flex-wrap:wrap; gap:6px; padding:8px; background:#fff; border:1px solid #bbf7d0; border-radius:6px;"></div>
+      </div>
+
+      <div id="misAsigBoxDocente" style="display:none; background:#fffbeb; border:1px solid #fcd34d; border-radius:8px; padding:10px 12px; margin-bottom:12px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px; margin-bottom:6px;">
+          <strong style="font-size:12.5px; color:#92400e;">📚 Mis Materias detectadas en el Parte Diario</strong>
+          <button type="button" class="btn-outline" style="padding:4px 9px; font-size:11.5px; border-color:#d97706; color:#92400e;" onclick="sincronizarMisAsignacionesDesdeHorariosUI()">
+            🔄 Buscar de nuevo en Horarios
+          </button>
+        </div>
+        <p style="font-size:11.5px; color:#92400e; margin-bottom:8px; line-height:1.35;">
+          Solo aparecen los cursos y materias donde figura tu <b>apellido + inicial del nombre</b> en los horarios del Parte Diario. Tildá los que correspondan a tu cargo:
+        </p>
+        <div id="misAsigListaMateriasDoc" style="display:flex; flex-direction:column; gap:6px; max-height:220px; overflow-y:auto; padding:8px; background:#fff; border:1px solid #fde68a; border-radius:6px;"></div>
+      </div>
+
+      <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:12px; border-top:1px solid #e2e8f0; padding-top:10px;">
+        <button type="button" class="btn-outline" onclick="cerrarModalMisAsignaciones()">Cancelar</button>
+        <button type="button" id="btnGuardarMisAsignaciones" class="btn-main btn-w4b" style="padding:9px 16px; font-size:13px;" onclick="guardarMisAsignacionesUI()">
+          💾 Guardar Mis Asignaciones
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div id="modalAyudaSistema" class="modal-backdrop">
+    <div class="modal-box" style="max-width:860px;">
+      <div class="modal-header">
+        <h2>❓ Guía de Uso y Régimen Académico (DGCyE)</h2>
+        <div style="display:flex; gap:6px; flex-wrap:wrap;">
+          <button type="button" class="btn-outline" onclick="imprimirGuiaAyudaActual()">🖨️ Imprimir / PDF</button>
+          <button type="button" class="btn-outline" onclick="cerrarModalAyuda()">✖ Cerrar</button>
+        </div>
+      </div>
+      <div id="ayudaTabsBar" class="ayuda-tabs-bar"></div>
+      <div id="ayudaBodyContent" style="max-height:68vh; overflow-y:auto; padding-right:4px;"></div>
+    </div>
+  </div>
+
+  <div id="modalInfoNormativa" class="modal-backdrop" style="z-index:450;">
+    <div class="modal-box" style="max-width:540px;">
+      <div class="modal-header">
+        <div>
+          <h2 id="infoNormTitulo" style="font-size:15px;">Información Normativa</h2>
+          <div id="infoNormSub" style="font-size:11px; color:#64748b; font-weight:700; margin-top:2px;"></div>
+        </div>
+        <button type="button" class="btn-outline" onclick="cerrarInfoNormativa()">✖</button>
+      </div>
+      <div id="infoNormBody" class="info-norm-body"></div>
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; margin-top:12px; border-top:1px solid #e2e8f0; padding-top:10px;">
+        <button type="button" class="btn-outline" style="color:#1e3a8a; border-color:#93c5fd;" onclick="cerrarInfoNormativa(); abrirModalAyuda('RA');">📖 Ver Guía Completa del RA</button>
+        <button type="button" class="btn-main btn-print-blue" style="padding:7px 14px; font-size:12px;" onclick="cerrarInfoNormativa()">Entendido</button>
+      </div>
+    </div>
+  </div>
+
   <div id="toast" class="toast"></div>
   <script src="catalogo_materias.js"></script>
   <script src="core.js"></script>
   <script src="academico.js"></script>
   <script src="parte.js"></script>
+  <script src="ayuda.js"></script>
 </body>
 </html>

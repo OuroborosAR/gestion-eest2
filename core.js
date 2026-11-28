@@ -103,16 +103,49 @@ let cicloSeleccionado = localStorage.getItem("eest2_ultimo_ciclo") || "";
 const nativeFetch = window.fetch.bind(window);
 window.fetch = async function(input, init) {
   const url = typeof input === "string" ? input : input.url;
-  if (url && url.indexOf("script.google.com") !== -1) {
-    if (init && init.method && init.method.toUpperCase() === "POST" && init.body) {
-      try {
-        const parsed = JSON.parse(init.body);
-        if (parsed.accion !== "login") {
-          parsed.authToken = sesionAuth.token;
-        }
-        if (!parsed.ciclo && cicloSeleccionado) parsed.ciclo = cicloSeleccionado;
-        init.body = JSON.stringify(parsed);
-      } catch (e) {}
+  const esAppsScript = Boolean(url && url.indexOf("script.google.com") !== -1);
+
+  if (esAppsScript && init && init.method && init.method.toUpperCase() === "POST" && init.body) {
+    try {
+      const parsed = JSON.parse(init.body);
+      if (!["login", "solicitarRegistroPersonal", "confirmarRegistroPersonal", "solicitarRecuperacionClave", "confirmarRecuperacionClave"].includes(parsed.accion)) {
+        parsed.authToken = sesionAuth.token;
+      }
+      if (!parsed.ciclo && cicloSeleccionado) parsed.ciclo = cicloSeleccionado;
+      init.body = JSON.stringify(parsed);
+    } catch (e) {}
+  }
+
+  if (!esAppsScript) {
+    return nativeFetch(input, init);
+  }
+
+  // Reintento automático silencioso si el servidor está ocupado por concurrencia (30+ usuarios)
+  const MAX_REINTENTOS = 2;
+  for (let intento = 0; intento <= MAX_REINTENTOS; intento++) {
+    try {
+      const resp = await nativeFetch(input, init);
+      if ((resp.status === 429 || resp.status === 503) && intento < MAX_REINTENTOS) {
+        await new Promise(r => setTimeout(r, 900 * (intento + 1) + Math.floor(Math.random() * 400)));
+        continue;
+      }
+      if (intento < MAX_REINTENTOS) {
+        try {
+          const clon = resp.clone();
+          const data = await clon.json();
+          if (data && data.ocupado) {
+            await new Promise(r => setTimeout(r, 1000 * (intento + 1) + Math.floor(Math.random() * 500)));
+            continue;
+          }
+        } catch (e) {}
+      }
+      return resp;
+    } catch (err) {
+      if (intento < MAX_REINTENTOS) {
+        await new Promise(r => setTimeout(r, 900 * (intento + 1)));
+        continue;
+      }
+      throw err;
     }
   }
   return nativeFetch(input, init);
@@ -125,8 +158,10 @@ let estado = {
   cursoActual: "",
   cursos: [],
   cursosTotales: [],
+  metadatosCursos: {},
   usuarioActual: null,
   usuariosSistema: [],
+  codigosAcceso: [],
   materias: [],
   estudiantes: [],
   columnasInasistencias: null,
@@ -224,15 +259,214 @@ function ocultarPantallaCargaInicial() {
   if (loader) loader.classList.add("hidden-loader");
 }
 
+let modoLoginSeleccionado = ""; // "" (bienvenida) | "FAMILIA" | "PERSONAL"
+
+function seleccionarModoLogin(modo) {
+  modoLoginSeleccionado = (modo === "FAMILIA") ? "FAMILIA" : "PERSONAL";
+  const stepWelcome = document.getElementById("loginStepWelcome");
+  const stepForm = document.getElementById("loginStepForm");
+  const badge = document.getElementById("loginModeBadge");
+  const hint = document.getElementById("loginHintBox");
+  const lblUser = document.getElementById("lblAuthInputUser");
+  const lblPass = document.getElementById("lblAuthInputPass");
+  const inpUser = document.getElementById("authInputUser");
+  const inpPass = document.getElementById("authInputPass");
+  const btnSubmit = document.getElementById("btnSubmitLogin");
+  const errBanner = document.getElementById("loginErrorBanner");
+
+  if (errBanner) errBanner.style.display = "none";
+  if (stepWelcome) stepWelcome.style.display = "none";
+  if (stepForm) stepForm.style.display = "block";
+
+  if (modoLoginSeleccionado === "FAMILIA") {
+    if (badge) {
+      badge.textContent = "👨‍👩‍👧 Portal de Familias";
+      badge.className = "login-mode-pill mode-familia";
+    }
+    if (hint) {
+      hint.innerHTML = "Ingresá el <b>DNI del estudiante</b> (sin puntos). En tu primer ingreso, la contraseña es el mismo DNI.";
+      hint.style.display = "block";
+    }
+    if (lblUser) lblUser.textContent = "DNI del Estudiante (sin puntos)";
+    if (lblPass) lblPass.textContent = "Contraseña o PIN";
+    if (inpUser) {
+      inpUser.placeholder = "Ej: 48123456";
+      inpUser.setAttribute("inputmode", "numeric");
+    }
+    if (inpPass) inpPass.placeholder = "DNI del estudiante o tu clave";
+    if (btnSubmit) {
+      btnSubmit.className = "btn-main btn-w4b";
+      btnSubmit.textContent = "Ingresar al Portal de Familias";
+    }
+  } else {
+    if (badge) {
+      badge.textContent = "🏫 Personal Escolar";
+      badge.className = "login-mode-pill mode-personal";
+    }
+    if (hint) {
+      hint.style.display = "none";
+    }
+    if (lblUser) lblUser.textContent = "Usuario";
+    if (lblPass) lblPass.textContent = "Contraseña";
+    if (inpUser) {
+      inpUser.placeholder = "Tu usuario institucional";
+      inpUser.setAttribute("inputmode", "text");
+    }
+    if (inpPass) inpPass.placeholder = "Tu contraseña";
+    if (btnSubmit) {
+      btnSubmit.className = "btn-main btn-print-blue";
+      btnSubmit.textContent = "Ingresar al Sistema";
+    }
+  }
+
+  const boxReg = document.getElementById("boxLinkRegistroPersonal");
+  if (boxReg) boxReg.style.display = (modoLoginSeleccionado === "PERSONAL") ? "block" : "none";
+  const stepReg = document.getElementById("loginStepRegister");
+  if (stepReg) stepReg.style.display = "none";
+  const stepRec = document.getElementById("loginStepRecover");
+  if (stepRec) stepRec.style.display = "none";
+
+  if (inpUser) {
+    inpUser.value = sesionAuth.usuario || "";
+    setTimeout(() => inpUser.focus(), 60);
+  }
+}
+
+function volverABienvenidaLogin() {
+  modoLoginSeleccionado = "";
+  const stepWelcome = document.getElementById("loginStepWelcome");
+  const stepForm = document.getElementById("loginStepForm");
+  const stepReg = document.getElementById("loginStepRegister");
+  const errBanner = document.getElementById("loginErrorBanner");
+  if (errBanner) errBanner.style.display = "none";
+  if (stepForm) stepForm.style.display = "none";
+  if (stepReg) stepReg.style.display = "none";
+  if (stepWelcome) stepWelcome.style.display = "block";
+}
+
+function abrirRegistroPersonalLogin() {
+  document.getElementById("loginStepWelcome").style.display = "none";
+  document.getElementById("loginStepForm").style.display = "none";
+  const stepRec = document.getElementById("loginStepRecover");
+  if (stepRec) stepRec.style.display = "none";
+  document.getElementById("loginStepRegister").style.display = "block";
+  document.getElementById("regSubStep1").style.display = "block";
+  document.getElementById("regSubStep2").style.display = "none";
+  const err = document.getElementById("regErrorBanner");
+  if (err) err.style.display = "none";
+}
+
+function volverALoginPersonalDesdeRegistro() {
+  seleccionarModoLogin("PERSONAL");
+}
+
+function mostrarErrorRegistro(msg) {
+  const err = document.getElementById("regErrorBanner");
+  if (!err) return;
+  if (msg) {
+    err.textContent = msg;
+    err.style.display = "block";
+  } else {
+    err.style.display = "none";
+  }
+}
+
+async function solicitarPinRegistroPersonal() {
+  mostrarErrorRegistro("");
+  const dni = document.getElementById("regInputDni")?.value.trim() || "";
+  const nombre = document.getElementById("regInputNombre")?.value.trim() || "";
+  const emailAbc = document.getElementById("regInputEmail")?.value.trim() || "";
+  const clave = document.getElementById("regInputPass")?.value.trim() || "";
+  const codigoSector1 = document.getElementById("regInputCod1")?.value.trim() || "";
+  const codigoSector2 = document.getElementById("regInputCod2")?.value.trim() || "";
+
+  if (!dni || !nombre || !emailAbc || !clave || !codigoSector1) {
+    return mostrarErrorRegistro("Completá DNI, Apellido y Nombre, correo @abc.gob.ar, contraseña y Código de Sector.");
+  }
+
+  const btn = document.getElementById("btnRegSolicitarPin");
+  try {
+    if (btn) { btn.disabled = true; btn.textContent = "⏳ Enviando código..."; }
+    const resp = await fetch(scriptUrl, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({
+        accion: "solicitarRegistroPersonal",
+        dni, nombre, emailAbc, clave, codigoSector1, codigoSector2
+      })
+    });
+    const json = await resp.json();
+    if (!json.ok) throw new Error(json.error);
+
+    document.getElementById("regLblEmailEnviado").textContent = json.resultado.emailAbc;
+    document.getElementById("regSubStep1").style.display = "none";
+    document.getElementById("regSubStep2").style.display = "block";
+    document.getElementById("regInputPin").value = "";
+    setTimeout(() => document.getElementById("regInputPin").focus(), 60);
+  } catch (err) {
+    mostrarErrorRegistro(err.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "📧 Enviar código de verificación a mi @abc.gob.ar"; }
+  }
+}
+
+async function confirmarPinRegistroPersonal() {
+  mostrarErrorRegistro("");
+  const dni = document.getElementById("regInputDni")?.value.trim() || "";
+  const pin = document.getElementById("regInputPin")?.value.trim() || "";
+  if (!pin || pin.length < 6) return mostrarErrorRegistro("Ingresá el código de 6 dígitos que llegó a tu @abc.gob.ar.");
+
+  const btn = document.getElementById("btnRegConfirmarPin");
+  try {
+    if (btn) { btn.disabled = true; btn.textContent = "⏳ Activando cuenta..."; }
+    const resp = await fetch(scriptUrl, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({
+        accion: "confirmarRegistroPersonal",
+        dni, pin
+      })
+    });
+    const json = await resp.json();
+    if (!json.ok || !json.token) throw new Error(json.error || "No se pudo confirmar el registro.");
+
+    sesionAuth.usuario = dni;
+    sesionAuth.token = json.token;
+    sessionStorage.setItem("eest2_auth_user", dni);
+    sessionStorage.setItem("eest2_auth_token", json.token);
+    localStorage.setItem("eest2_auth_user", dni);
+    localStorage.setItem("eest2_auth_token", json.token);
+
+    document.getElementById("loginOverlayScreen").classList.remove("open");
+    aplicarDatosRecibidos(json.data, false);
+    actualizarSubtituloHeader();
+
+    const rAuto = json.resumenAutoAsignacion || {};
+    mostrarToast(`✅ Cuenta activada (${rAuto.cursosPreceptor || 0} cursos PR, ${rAuto.materiasDocente || 0} materias Doc detectadas)`, 4500);
+
+    if ((json.data.cursos || []).length === 0) {
+      abrirModalMisAsignaciones();
+    }
+  } catch (err) {
+    mostrarErrorRegistro(err.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "✅ Confirmar y Activar mi Cuenta"; }
+  }
+}
+
 function mostrarPantallaLogin(msgError) {
   const banner = document.getElementById("loginErrorBanner");
   if (msgError) {
-    banner.textContent = msgError;
-    banner.style.display = "block";
+    if (!modoLoginSeleccionado) {
+      seleccionarModoLogin("PERSONAL");
+    }
+    if (banner) {
+      banner.textContent = msgError;
+      banner.style.display = "block";
+    }
   } else {
-    banner.style.display = "none";
+    volverABienvenidaLogin();
   }
-  document.getElementById("authInputUser").value = sesionAuth.usuario || "";
   document.getElementById("loginOverlayScreen").classList.add("open");
 }
 
@@ -242,7 +476,11 @@ async function iniciarSesionSistema() {
   const recordar = document.getElementById("authChkRemember").checked;
 
   if (!u || !c) {
-    mostrarPantallaLogin("Ingresá tu usuario (o DNI del estudiante) y tu contraseña.");
+    mostrarPantallaLogin(
+      modoLoginSeleccionado === "FAMILIA"
+        ? "Ingresá el DNI del estudiante y la contraseña."
+        : "Ingresá tu usuario y tu contraseña."
+    );
     return;
   }
 
@@ -297,7 +535,9 @@ async function iniciarSesionSistema() {
     mostrarPantallaLogin(err.message);
   } finally {
     btn.disabled = false;
-    btn.textContent = "Ingresar";
+    btn.textContent = (modoLoginSeleccionado === "FAMILIA")
+      ? "Ingresar al Portal de Familias"
+      : "Ingresar al Sistema";
   }
 }
 
@@ -366,10 +606,30 @@ async function confirmarCambioClaveObligatorio() {
   }
 }
 
+function obtenerRolesActuales() {
+  if (!estado.usuarioActual) return [];
+  if (Array.isArray(estado.usuarioActual.roles) && estado.usuarioActual.roles.length > 0) {
+    return estado.usuarioActual.roles;
+  }
+  const arr = [];
+  const r1 = String(estado.usuarioActual.rol || "").toUpperCase();
+  const r2 = String(estado.usuarioActual.rolSecundario || "").toUpperCase();
+  if (r1) arr.push(r1);
+  if (r2 && r2 !== r1) arr.push(r2);
+  return arr;
+}
+
+function tieneRolActual(rol) {
+  return obtenerRolesActuales().includes(String(rol || "").toUpperCase());
+}
+
+function tieneAlgunRolActual(lista) {
+  const rs = obtenerRolesActuales();
+  return (lista || []).some(r => rs.includes(r));
+}
+
 function esAdminODirectivoActual() {
-  if (!estado.usuarioActual) return false;
-  const r = String(estado.usuarioActual.rol || "").toUpperCase();
-  return r === "ADMIN" || r === "DIRECTIVO";
+  return tieneAlgunRolActual(["ADMIN", "DIRECTIVO"]);
 }
 
 function esRolFamiliaActual() {
@@ -377,11 +637,126 @@ function esRolFamiliaActual() {
   return String(estado.usuarioActual.rol || "").toUpperCase() === "FAMILIA";
 }
 
+function esPreceptorEnCursoActual() {
+  if (tieneAlgunRolActual(["ADMIN", "DIRECTIVO", "JEFE_PR"])) return true;
+  if (!tieneRolActual("PRECEPTOR")) return false;
+  const perm = (estado.usuarioActual?.cursosPermitidos || []).map(c => String(c).toLowerCase());
+  const cur = String(estado.cursoActual || "").toLowerCase();
+  return perm.includes("todos") || (cur && perm.includes(cur));
+}
+
+function obtenerMateriasDocenteEnCursoActual() {
+  if (!tieneRolActual("DOCENTE")) return [];
+  const cur = String(estado.cursoActual || "").toLowerCase();
+  return (estado.usuarioActual?.materiasDocente || [])
+    .filter(m => String(m.curso || "").toLowerCase() === cur)
+    .map(m => String(m.materia || "").trim());
+}
+
+function esModoDocenteEnCursoActual() {
+  if (esRolFamiliaActual()) return false;
+  if (esPreceptorEnCursoActual()) return false;
+  if (tieneAlgunRolActual(["EOE", "SECRETARIA"])) return false;
+  return tieneRolActual("DOCENTE");
+}
+
+function puedeEditarNotasMateriaActual(matObj) {
+  if (esRolFamiliaActual()) return false;
+  if (esPreceptorEnCursoActual()) return true;
+  if (tieneRolActual("DOCENTE")) {
+    const permitidas = obtenerMateriasDocenteEnCursoActual();
+    if (permitidas.length === 0) return false;
+    if (!matObj) return true;
+    const norm = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^A-Z0-9]/gi, "").toUpperCase();
+    const kMat = norm(matObj.nombre);
+    return permitidas.some(p => {
+      const kp = norm(p);
+      return kp === kMat || (kp.length >= 5 && kMat.indexOf(kp) !== -1) || (kMat.length >= 5 && kp.indexOf(kMat) !== -1);
+    });
+  }
+  return false;
+}
+
+function obtenerPestanasPermitidasActual() {
+  if (esRolFamiliaActual()) return ["alumno"];
+  if (esPreceptorEnCursoActual()) return ["asistencia", "parte", "materia", "alumno", "actas", "planilla"];
+
+  const tabs = new Set();
+  if (tieneRolActual("EOE")) {
+    tabs.add("alumno");
+    tabs.add("actas");
+    tabs.add("planilla");
+  }
+  if (tieneRolActual("SECRETARIA")) {
+    tabs.add("alumno");
+    tabs.add("planilla");
+    tabs.add("materia");
+  }
+  if (tieneRolActual("DOCENTE")) {
+    tabs.add("materia");
+  }
+  if (tabs.size === 0) tabs.add("materia");
+  return ["asistencia", "parte", "materia", "alumno", "actas", "planilla"].filter(t => tabs.has(t));
+}
+
 function abrirModalGestionUsuarios() {
   limpiarFormularioGestionUsuario();
   renderizarTablaUsuariosSistema();
+  renderizarCodigosAccesoAdmin();
   cargarAuditoriaSeguridadUI();
   document.getElementById("modalGestionUsuarios").classList.add("open");
+}
+
+function renderizarCodigosAccesoAdmin() {
+  const cont = document.getElementById("contenedorCodigosAccesoAdmin");
+  if (!cont) return;
+  const lista = estado.codigosAcceso || [];
+  if (lista.length === 0) {
+    cont.innerHTML = `<p style="font-size:12px; color:#64748b;">Los códigos se cargan al abrir con cuenta Directivo/Admin.</p>`;
+    return;
+  }
+  let html = `<div class="codigos-acceso-grid">`;
+  lista.forEach((item, idx) => {
+    html += `
+      <div class="cod-acc-row">
+        <div class="cod-acc-rol">
+          <strong>${escHtml(item.rol)}</strong>
+          <small>${escHtml(item.descripcion || "")}</small>
+        </div>
+        <input type="text" class="cod-acc-inp" data-idx="${idx}" data-rol="${escHtml(item.rol)}" data-desc="${escHtml(item.descripcion || "")}" value="${escHtml(item.codigo)}">
+      </div>
+    `;
+  });
+  html += `</div>`;
+  cont.innerHTML = html;
+}
+
+async function guardarCodigosAccesoUI() {
+  const inputs = Array.from(document.querySelectorAll(".cod-acc-inp"));
+  const codigos = inputs.map(inp => ({
+    rol: inp.dataset.rol,
+    codigo: inp.value.trim().toUpperCase(),
+    descripcion: inp.dataset.desc || ""
+  })).filter(x => x.rol && x.codigo);
+
+  const btn = document.getElementById("btnGuardarCodigosAcceso");
+  try {
+    if (btn) { btn.disabled = true; btn.textContent = "Guardando..."; }
+    const resp = await fetch(scriptUrl, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ accion: "guardarCodigosAcceso", codigos })
+    });
+    const json = await resp.json();
+    if (!json.ok) throw new Error(json.error);
+    estado.codigosAcceso = json.codigosAcceso || codigos;
+    renderizarCodigosAccesoAdmin();
+    mostrarToast("✅ Códigos de acceso actualizados");
+  } catch (err) {
+    mostrarToast("⚠️ Error: " + err.message, 4000);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "💾 Guardar Códigos"; }
+  }
 }
 
 function cerrarModalGestionUsuarios() {
@@ -389,8 +764,10 @@ function cerrarModalGestionUsuarios() {
 }
 
 function actualizarVisibilidadCursosPreceptor() {
-  const rol = document.getElementById("usrFormRol").value;
-  document.getElementById("usrFormCursosBox").style.display = (rol === "PRECEPTOR") ? "flex" : "none";
+  const rol1 = document.getElementById("usrFormRol")?.value || "";
+  const rol2 = document.getElementById("usrFormRolSec")?.value || "";
+  const esPR = (rol1 === "PRECEPTOR" || rol2 === "PRECEPTOR") && !["ADMIN", "DIRECTIVO", "JEFE_PR", "SECRETARIA", "EOE"].includes(rol1);
+  document.getElementById("usrFormCursosBox").style.display = esPR ? "flex" : "none";
 }
 
 function renderizarCheckboxesCursosPreceptor(seleccionados) {
@@ -419,6 +796,10 @@ function limpiarFormularioGestionUsuario() {
   document.getElementById("usrFormClave").value = "";
   document.getElementById("usrFormNombre").value = "";
   document.getElementById("usrFormRol").value = "PRECEPTOR";
+  const r2 = document.getElementById("usrFormRolSec");
+  if (r2) r2.value = "";
+  const em = document.getElementById("usrFormEmailAbc");
+  if (em) em.value = "";
   actualizarVisibilidadCursosPreceptor();
   renderizarCheckboxesCursosPreceptor(["TODOS"]);
 }
@@ -429,6 +810,10 @@ function editarUsuarioEnFormulario(u) {
   document.getElementById("usrFormClave").placeholder = "Dejar vacío para mantener clave actual";
   document.getElementById("usrFormNombre").value = u.nombre;
   document.getElementById("usrFormRol").value = u.rol;
+  const r2 = document.getElementById("usrFormRolSec");
+  if (r2) r2.value = u.rolSecundario || "";
+  const em = document.getElementById("usrFormEmailAbc");
+  if (em) em.value = u.emailAbc || "";
   actualizarVisibilidadCursosPreceptor();
   const listaCursos = String(u.cursosPermitidos || "TODOS").split(",").map(s => s.trim());
   renderizarCheckboxesCursosPreceptor(listaCursos);
@@ -453,7 +838,7 @@ function renderizarTablaUsuariosSistema() {
         <td><strong>${escHtml(u.usuario)}</strong></td>
         <td>${estadoClave}</td>
         <td class="td-left">${escHtml(u.nombre)}</td>
-        <td><span class="badge badge-grp">${escHtml(u.rol)}</span></td>
+        <td><span class="badge badge-grp">${escHtml(u.rol)}${u.rolSecundario ? ' + ' + escHtml(u.rolSecundario) : ''}</span></td>
         <td>${escHtml(u.cursosPermitidos)}</td>
         <td>
           <button type="button" class="btn-outline" style="padding:3px 7px; font-size:11px;" onclick='editarUsuarioEnFormulario(${JSON.stringify(u)})'>Editar</button>
@@ -530,6 +915,8 @@ async function guardarUsuarioDesdePanel() {
   const clave = document.getElementById("usrFormClave").value.trim();
   const nombre = document.getElementById("usrFormNombre").value.trim();
   const rol = document.getElementById("usrFormRol").value;
+  const rolSecundario = document.getElementById("usrFormRolSec")?.value || "";
+  const emailAbc = document.getElementById("usrFormEmailAbc")?.value.trim() || "";
 
   const existeYa = (estado.usuariosSistema || []).some(u => u.usuario.toLowerCase() === usuario.toLowerCase());
   if (!usuario) {
@@ -553,7 +940,7 @@ async function guardarUsuarioDesdePanel() {
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({
         accion: "guardarUsuario",
-        datosUsuario: { usuario, clave, nombre, rol, cursosPermitidos, activo: true }
+        datosUsuario: { usuario, clave, nombre, rol, rolSecundario, emailAbc, cursosPermitidos, activo: true }
       })
     });
     const json = await resp.json();
@@ -637,14 +1024,115 @@ function instalarPWA() {
   }
 }
 
+const MODALIDADES_CURSO_INFO = {
+  CICLO_BASICO: { label: "Ciclo Básico", short: "📘 Ciclo Básico", cls: "cmod-cb", orden: 1 },
+  ELECTROMECANICA: { label: "Electromecánica", short: "⚡ Electromecánica", cls: "cmod-em", orden: 2 },
+  ALIMENTOS: { label: "Alimentos", short: "🧪 Alimentos", cls: "cmod-al", orden: 3 },
+  NAVAL: { label: "Constructor Naval", short: "⚓ Naval", cls: "cmod-nv", orden: 4 },
+  SIN_CLASIFICAR: { label: "Sin clasificar", short: "📁 Sin clasificar", cls: "cmod-sc", orden: 5 }
+};
+
+let filtroCursoModal = { modalidad: "TODOS", anio: "TODOS", texto: "" };
+let cursoEnClasificacion = "";
+
+function obtenerMetaCurso(nombreCurso) {
+  const nom = String(nombreCurso || "").trim();
+  const desdeSheet = estado.metadatosCursos && estado.metadatosCursos[nom];
+  if (desdeSheet && desdeSheet.modalidad) {
+    return desdeSheet;
+  }
+  const anio = typeof detectarAnioDesdeNombreCurso === "function" ? detectarAnioDesdeNombreCurso(nom) : 0;
+  if (anio >= 1 && anio <= 3) {
+    return { curso: nom, ciclo: "CICLO_BASICO", anio: anio, modalidad: "CICLO_BASICO", grupoTaller1: "", grupoTaller2: "" };
+  }
+  const mapaLoc = typeof obtenerMapaEspecialidadesCursos === "function" ? obtenerMapaEspecialidadesCursos() : {};
+  const modLoc = mapaLoc[nom] || "SIN_CLASIFICAR";
+  return {
+    curso: nom,
+    ciclo: anio >= 4 ? "CICLO_SUPERIOR" : "SIN_CLASIFICAR",
+    anio: anio,
+    modalidad: modLoc,
+    grupoTaller1: "",
+    grupoTaller2: ""
+  };
+}
+
+function compararCursosOrdenNatural(a, b) {
+  const ma = obtenerMetaCurso(a);
+  const mb = obtenerMetaCurso(b);
+  const aa = ma.anio || 99;
+  const ab = mb.anio || 99;
+  if (aa !== ab) return aa - ab;
+  const na = (String(a).match(/\d+/g) || []).map(Number);
+  const nb = (String(b).match(/\d+/g) || []).map(Number);
+  for (let i = 0; i < Math.max(na.length, nb.length); i++) {
+    const va = na[i] ?? 0;
+    const vb = nb[i] ?? 0;
+    if (va !== vb) return va - vb;
+  }
+  return String(a).localeCompare(String(b), "es");
+}
+
+function poblarSelectorCursosAgrupado(cursosLista, cursoActual) {
+  const selCurso = document.getElementById("cursoSelect");
+  if (!selCurso) return;
+  selCurso.innerHTML = "";
+
+  const ordenados = [...(cursosLista || [])].sort(compararCursosOrdenNatural);
+  if (ordenados.length <= 5) {
+    ordenados.forEach(c => {
+      const opt = document.createElement("option");
+      opt.value = c;
+      const meta = obtenerMetaCurso(c);
+      const info = MODALIDADES_CURSO_INFO[meta.modalidad] || MODALIDADES_CURSO_INFO.SIN_CLASIFICAR;
+      opt.textContent = `${c.replace(/_/g, " ")} (${info.label})`;
+      if (c === cursoActual) opt.selected = true;
+      selCurso.appendChild(opt);
+    });
+    return;
+  }
+
+  const grupos = {};
+  ordenados.forEach(c => {
+    const mod = obtenerMetaCurso(c).modalidad || "SIN_CLASIFICAR";
+    if (!grupos[mod]) grupos[mod] = [];
+    grupos[mod].push(c);
+  });
+
+  Object.keys(MODALIDADES_CURSO_INFO).forEach(modKey => {
+    const listaMod = grupos[modKey];
+    if (!listaMod || listaMod.length === 0) return;
+    const og = document.createElement("optgroup");
+    og.label = MODALIDADES_CURSO_INFO[modKey].short;
+    listaMod.forEach(c => {
+      const opt = document.createElement("option");
+      opt.value = c;
+      opt.textContent = c.replace(/_/g, " ");
+      if (c === cursoActual) opt.selected = true;
+      og.appendChild(opt);
+    });
+    selCurso.appendChild(og);
+  });
+}
+
 function abrirModalSelectorCurso(directoACrear = false) {
   if (esRolFamiliaActual()) return;
+  cerrarClasificadorCursoModal();
+  const selG1 = document.getElementById("ncGrupoTaller1");
+  const selG2 = document.getElementById("ncGrupoTaller2");
+  if (selG1 && !selG1.options.length) {
+    selG1.innerHTML = LETRAS_GRUPOS.map(l => `<option value="GRUPO ${l}" ${l === "A" ? "selected" : ""}>GRUPO ${l}</option>`).join("");
+  }
+  if (selG2 && !selG2.options.length) {
+    selG2.innerHTML = LETRAS_GRUPOS.map(l => `<option value="GRUPO ${l}" ${l === "B" ? "selected" : ""}>GRUPO ${l}</option>`).join("");
+  }
   renderTarjetasCursosEnModal();
   mostrarFormularioNuevoCurso(directoACrear);
   document.getElementById("modalSelectorCurso").classList.add("open");
 }
 
 function cerrarModalSelectorCurso() {
+  cerrarClasificadorCursoModal();
   document.getElementById("modalSelectorCurso").classList.remove("open");
 }
 
@@ -653,34 +1141,215 @@ function mostrarFormularioNuevoCurso(mostrar) {
   document.getElementById("seccionFormularioNuevoCurso").classList.toggle("hidden", !mostrar);
 }
 
+function alEscribirNombreNuevoCurso(valor) {
+  const anio = typeof detectarAnioDesdeNombreCurso === "function" ? detectarAnioDesdeNombreCurso(valor) : 0;
+  const selAnio = document.getElementById("ncAnioPlan");
+  const selEsp = document.getElementById("ncEspecialidad");
+  if (!anio || !selAnio || !selEsp) return;
+  selAnio.value = String(anio);
+  if (anio >= 1 && anio <= 3) {
+    if (selEsp.value !== "CICLO_BASICO") {
+      selEsp.value = "CICLO_BASICO";
+      aplicarPlanCurricularANuevoCurso();
+    } else {
+      aplicarPlanCurricularANuevoCurso();
+    }
+  } else if (selEsp.value === "CICLO_BASICO") {
+    selEsp.value = "";
+  }
+}
+
+function alCambiarBusquedaCursos(txt) {
+  filtroCursoModal.texto = String(txt || "").trim().toLowerCase();
+  renderTarjetasCursosEnModal();
+}
+
+function seleccionarFiltroModalidadCursos(modKey) {
+  filtroCursoModal.modalidad = modKey;
+  if (modKey === "CICLO_BASICO" && !["TODOS", "1", "2", "3"].includes(filtroCursoModal.anio)) {
+    filtroCursoModal.anio = "TODOS";
+  } else if (["ELECTROMECANICA", "ALIMENTOS", "NAVAL"].includes(modKey) && !["TODOS", "4", "5", "6", "7"].includes(filtroCursoModal.anio)) {
+    filtroCursoModal.anio = "TODOS";
+  }
+  renderTarjetasCursosEnModal();
+}
+
+function seleccionarFiltroAnioCursos(anioVal) {
+  filtroCursoModal.anio = String(anioVal);
+  renderTarjetasCursosEnModal();
+}
+
+function renderFiltrosNavegadorCursos(listaTotal) {
+  const contMod = document.getElementById("cursoNavModalidadChips");
+  const contAnio = document.getElementById("cursoNavAnioChips");
+  if (!contMod || !contAnio) return;
+
+  const conteosMod = { TODOS: listaTotal.length, CICLO_BASICO: 0, ELECTROMECANICA: 0, ALIMENTOS: 0, NAVAL: 0, SIN_CLASIFICAR: 0 };
+  listaTotal.forEach(c => {
+    const m = obtenerMetaCurso(c).modalidad || "SIN_CLASIFICAR";
+    if (conteosMod[m] !== undefined) conteosMod[m]++;
+  });
+
+  const botonesMod = [
+    { key: "TODOS", lbl: `Todos (${conteosMod.TODOS})` },
+    { key: "CICLO_BASICO", lbl: `📘 Ciclo Básico (${conteosMod.CICLO_BASICO})` },
+    { key: "ELECTROMECANICA", lbl: `⚡ Electromecánica (${conteosMod.ELECTROMECANICA})` },
+    { key: "ALIMENTOS", lbl: `🧪 Alimentos (${conteosMod.ALIMENTOS})` },
+    { key: "NAVAL", lbl: `⚓ Naval (${conteosMod.NAVAL})` }
+  ];
+  if (conteosMod.SIN_CLASIFICAR > 0) {
+    botonesMod.push({ key: "SIN_CLASIFICAR", lbl: `📁 Sin clasificar (${conteosMod.SIN_CLASIFICAR})` });
+  }
+
+  contMod.innerHTML = botonesMod.map(b =>
+    `<button type="button" class="cnav-chip ${filtroCursoModal.modalidad === b.key ? 'active' : ''}" onclick="seleccionarFiltroModalidadCursos('${b.key}')">${b.lbl}</button>`
+  ).join("");
+
+  let aniosVisibles = ["1", "2", "3", "4", "5", "6", "7"];
+  if (filtroCursoModal.modalidad === "CICLO_BASICO") aniosVisibles = ["1", "2", "3"];
+  else if (["ELECTROMECANICA", "ALIMENTOS", "NAVAL"].includes(filtroCursoModal.modalidad)) aniosVisibles = ["4", "5", "6", "7"];
+
+  let htmlAnios = `<button type="button" class="cnav-chip cnav-chip-anio ${filtroCursoModal.anio === 'TODOS' ? 'active' : ''}" onclick="seleccionarFiltroAnioCursos('TODOS')">Todos los años</button>`;
+  aniosVisibles.forEach(a => {
+    htmlAnios += `<button type="button" class="cnav-chip cnav-chip-anio ${filtroCursoModal.anio === a ? 'active' : ''}" onclick="seleccionarFiltroAnioCursos('${a}')">${a}°</button>`;
+  });
+  contAnio.innerHTML = htmlAnios;
+}
+
 function renderTarjetasCursosEnModal() {
   const grid = document.getElementById("gridCursosDisponibles");
   if (!grid) return;
-  const lista = estado.cursos || [];
-  if (lista.length === 0) {
-    grid.innerHTML = `<p style="color:#64748b; font-size:12px;">Aún no hay cursos cargados.</p>`;
+  const listaTotal = [...(estado.cursos || [])].sort(compararCursosOrdenNatural);
+  renderFiltrosNavegadorCursos(listaTotal);
+
+  const filtrados = listaTotal.filter(c => {
+    const meta = obtenerMetaCurso(c);
+    if (filtroCursoModal.modalidad !== "TODOS" && meta.modalidad !== filtroCursoModal.modalidad) return false;
+    if (filtroCursoModal.anio !== "TODOS" && String(meta.anio || "") !== String(filtroCursoModal.anio)) return false;
+    if (filtroCursoModal.texto) {
+      const info = MODALIDADES_CURSO_INFO[meta.modalidad] || MODALIDADES_CURSO_INFO.SIN_CLASIFICAR;
+      const buscable = `${c.replace(/_/g, " ")} ${info.label} ${meta.anio || ""} ${meta.grupoTaller1 || ""} ${meta.grupoTaller2 || ""}`.toLowerCase();
+      const tokens = filtroCursoModal.texto.split(/\s+/).filter(Boolean);
+      if (!tokens.every(tk => buscable.indexOf(tk) !== -1)) return false;
+    }
+    return true;
+  });
+
+  const lblCnt = document.getElementById("cursoNavCount");
+  if (lblCnt) lblCnt.textContent = `${filtrados.length} de ${listaTotal.length} curso${listaTotal.length === 1 ? "" : "s"}`;
+
+  if (filtrados.length === 0) {
+    grid.innerHTML = `<p style="color:#64748b; font-size:12.5px; padding:10px 4px;">No se encontraron cursos con ese filtro.</p>`;
     return;
   }
 
   const puedeBorrar = esAdminODirectivoActual();
+  const puedeClasificar = !esRolFamiliaActual();
   let html = "";
-  lista.forEach(c => {
+  filtrados.forEach(c => {
     const esActual = c === estado.cursoActual;
     const limpio = c.replace(/_/g, " ");
+    const meta = obtenerMetaCurso(c);
+    const info = MODALIDADES_CURSO_INFO[meta.modalidad] || MODALIDADES_CURSO_INFO.SIN_CLASIFICAR;
+    const txtGrupos = (meta.grupoTaller1 || meta.grupoTaller2)
+      ? ` • ${[meta.grupoTaller1, meta.grupoTaller2].filter(Boolean).map(g => g.replace("GRUPO ", "Gr.")).join("/")}`
+      : "";
+
     html += `
       <div class="course-card-item ${esActual ? 'active-course' : ''}">
         <button type="button" class="course-card-btn" onclick="seleccionarCursoDesdeModal('${c}')">
           <strong>🏫 ${limpio}</strong>
-          <small>${esActual ? 'Curso activo' : 'Tocar para abrir'}</small>
+          <span class="course-mod-badge ${info.cls}">${info.short}${meta.anio ? ` • ${meta.anio}°` : ""}</span>
+          <small style="display:block; margin-top:3px;">${esActual ? 'Curso activo' : 'Tocar para abrir'}${txtGrupos}</small>
         </button>
-        ${puedeBorrar ? `
-        <button type="button" class="course-delete-btn" title="Eliminar curso ${limpio}" onclick="confirmarEliminarCurso('${c}')">
-          🗑️
-        </button>` : ''}
+        ${(puedeClasificar || puedeBorrar) ? `
+        <div class="course-card-actions">
+          ${puedeClasificar ? `<button type="button" class="course-edit-btn" title="Clasificar modalidad y grupos de ${limpio}" onclick="abrirClasificadorCursoModal('${c}')">🏷️</button>` : ""}
+          ${puedeBorrar ? `<button type="button" class="course-delete-btn" title="Eliminar curso ${limpio}" onclick="confirmarEliminarCurso('${c}')">🗑️</button>` : ""}
+        </div>` : ''}
       </div>
     `;
   });
   grid.innerHTML = html;
+}
+
+function abrirClasificadorCursoModal(nombreCurso) {
+  cursoEnClasificacion = nombreCurso;
+  const meta = obtenerMetaCurso(nombreCurso);
+  const panel = document.getElementById("panelClasificarCursoModal");
+  if (!panel) return;
+  document.getElementById("clsCursoNombreLbl").textContent = nombreCurso.replace(/_/g, " ");
+
+  const selMod = document.getElementById("clsCursoModalidad");
+  const selAnio = document.getElementById("clsCursoAnio");
+  const selG1 = document.getElementById("clsCursoGrupo1");
+  const selG2 = document.getElementById("clsCursoGrupo2");
+
+  const modVal = (meta.modalidad && meta.modalidad !== "SIN_CLASIFICAR")
+    ? meta.modalidad
+    : (meta.anio >= 1 && meta.anio <= 3 ? "CICLO_BASICO" : "ELECTROMECANICA");
+  if (selMod) selMod.value = modVal;
+  if (selAnio) selAnio.value = String(meta.anio || (modVal === "CICLO_BASICO" ? 1 : 4));
+
+  const g1Val = normalizarGrupoLetra(meta.grupoTaller1 || "GRUPO A");
+  const g2Val = normalizarGrupoLetra(meta.grupoTaller2 || "GRUPO B");
+  if (selG1) selG1.innerHTML = LETRAS_GRUPOS.map(l => `<option value="GRUPO ${l}" ${("GRUPO " + l) === g1Val ? "selected" : ""}>GRUPO ${l}</option>`).join("");
+  if (selG2) selG2.innerHTML = LETRAS_GRUPOS.map(l => `<option value="GRUPO ${l}" ${("GRUPO " + l) === g2Val ? "selected" : ""}>GRUPO ${l}</option>`).join("");
+
+  panel.classList.remove("hidden");
+  panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function alCambiarModalidadClasificador() {
+  const mod = document.getElementById("clsCursoModalidad")?.value || "CICLO_BASICO";
+  const selAnio = document.getElementById("clsCursoAnio");
+  if (!selAnio) return;
+  const a = parseInt(selAnio.value, 10) || 0;
+  if (mod === "CICLO_BASICO" && a > 3) selAnio.value = "1";
+  if (mod !== "CICLO_BASICO" && a < 4) selAnio.value = "4";
+}
+
+function cerrarClasificadorCursoModal() {
+  cursoEnClasificacion = "";
+  const panel = document.getElementById("panelClasificarCursoModal");
+  if (panel) panel.classList.add("hidden");
+}
+
+async function guardarClasificacionCursoModal() {
+  if (!cursoEnClasificacion) return;
+  const modalidad = document.getElementById("clsCursoModalidad")?.value || "CICLO_BASICO";
+  const anio = parseInt(document.getElementById("clsCursoAnio")?.value || "0", 10);
+  const grupoTaller1 = document.getElementById("clsCursoGrupo1")?.value || "GRUPO A";
+  const grupoTaller2 = document.getElementById("clsCursoGrupo2")?.value || "GRUPO B";
+
+  const btn = document.getElementById("btnGuardarClasificacionCurso");
+  try {
+    if (btn) { btn.disabled = true; btn.textContent = "Guardando..."; }
+    const resp = await fetch(scriptUrl, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({
+        accion: "guardarMetadatosCurso",
+        nombreCurso: cursoEnClasificacion,
+        metadatosCurso: { modalidad, anio, grupoTaller1, grupoTaller2 }
+      })
+    });
+    const json = await resp.json();
+    if (!json.ok) throw new Error(json.error);
+
+    estado.metadatosCursos = json.metadatosCursos || estado.metadatosCursos;
+    if (typeof guardarEspecialidadCursoLocal === "function") guardarEspecialidadCursoLocal(cursoEnClasificacion, modalidad);
+    if (typeof guardarGruposTallerCursoLocal === "function") guardarGruposTallerCursoLocal(cursoEnClasificacion, grupoTaller1, grupoTaller2);
+
+    poblarSelectorCursosAgrupado(estado.cursos, estado.cursoActual);
+    cerrarClasificadorCursoModal();
+    renderTarjetasCursosEnModal();
+    mostrarToast("✅ Clasificación guardada en Google Sheets");
+  } catch (err) {
+    mostrarToast("⚠️ Error: " + err.message, 4000);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "💾 Guardar Clasificación"; }
+  }
 }
 
 async function seleccionarCursoDesdeModal(nombreCurso) {
@@ -782,7 +1451,13 @@ async function ejecutarCreacionNuevoCurso() {
         nombreCurso: nombreRaw,
         materias: materias,
         preceptores: preceptores,
-        estudiantesIniciales: estudiantesIniciales
+        estudiantesIniciales: estudiantesIniciales,
+        metadatosCurso: {
+          modalidad: document.getElementById("ncEspecialidad")?.value || "",
+          anio: parseInt(document.getElementById("ncAnioPlan")?.value || "0", 10) || 0,
+          grupoTaller1: document.getElementById("ncGrupoTaller1")?.value || "GRUPO A",
+          grupoTaller2: document.getElementById("ncGrupoTaller2")?.value || "GRUPO B"
+        }
       })
     });
     const json = await resp.json();
@@ -1086,17 +1761,23 @@ function abrirModalConfigHorario() {
   document.getElementById("cfgPrecTT").value = prec.tt || "___________";
   document.getElementById("cfgPrecTV").value = prec.tv || "___________";
 
+  const metaAct = obtenerMetaCurso(estado.cursoActual);
   const selEsp = document.getElementById("cfgEspecialidadHorario");
   const selAnio = document.getElementById("cfgAnioHorario");
-  if (selEsp && typeof detectarEspecialidadCurso === "function") {
-    selEsp.value = detectarEspecialidadCurso(estado.cursoActual, estado.materias);
+  if (selEsp) {
+    const espVal = (metaAct.modalidad && metaAct.modalidad !== "SIN_CLASIFICAR")
+      ? metaAct.modalidad
+      : (typeof detectarEspecialidadCurso === "function" ? detectarEspecialidadCurso(estado.cursoActual, estado.materias) : "ELECTROMECANICA");
+    selEsp.value = espVal;
   }
-  if (selAnio && typeof detectarAnioDesdeNombreCurso === "function") {
-    const aDet = detectarAnioDesdeNombreCurso(estado.cursoActual);
+  if (selAnio) {
+    const aDet = metaAct.anio || (typeof detectarAnioDesdeNombreCurso === "function" ? detectarAnioDesdeNombreCurso(estado.cursoActual) : 0);
     selAnio.value = aDet ? String(aDet) : (selEsp && selEsp.value === "CICLO_BASICO" ? "1" : "4");
   }
 
-  const [defG1, defG2] = detectarGruposTallerDelCurso();
+  const [detG1, detG2] = detectarGruposTallerDelCurso();
+  const defG1 = metaAct.grupoTaller1 ? normalizarGrupoLetra(metaAct.grupoTaller1) : detG1;
+  const defG2 = metaAct.grupoTaller2 ? normalizarGrupoLetra(metaAct.grupoTaller2) : detG2;
   const selG1 = document.getElementById("cfgGrupoTaller1");
   const selG2 = document.getElementById("cfgGrupoTaller2");
   if (selG1) selG1.innerHTML = LETRAS_GRUPOS.map(l => `<option value="GRUPO ${l}" ${("GRUPO " + l) === defG1 ? "selected" : ""}>GRUPO ${l}</option>`).join("");
@@ -1707,7 +2388,13 @@ async function guardarHorarioEnGoogleSheet() {
         curso: estado.cursoActual,
         preceptores: preceptores,
         bloques: bloquesLimpios,
-        sincronizarMateriasPlanilla: sincronizarMat
+        sincronizarMateriasPlanilla: sincronizarMat,
+        metadatosCurso: {
+          modalidad: document.getElementById("cfgEspecialidadHorario")?.value || "",
+          anio: parseInt(document.getElementById("cfgAnioHorario")?.value || "0", 10) || 0,
+          grupoTaller1: document.getElementById("cfgGrupoTaller1")?.value || "",
+          grupoTaller2: document.getElementById("cfgGrupoTaller2")?.value || ""
+        }
       })
     });
     const json = await resp.json();
@@ -1767,15 +2454,20 @@ try {
 } catch (e) {}
 
 function mostrarVista(nombre) {
-  if (esRolFamiliaActual()) {
-    nombre = "alumno";
+  const permitidas = obtenerPestanasPermitidasActual();
+  if (!permitidas.includes(nombre)) {
+    nombre = permitidas[0] || "materia";
   }
   vistaActualApp = nombre;
   ["asistencia", "parte", "materia", "alumno", "actas", "planilla"].forEach(v => {
     const sec = document.getElementById(`vista-${v}`);
     const btn = document.getElementById(`tabBtn-${v}`);
+    const permitido = permitidas.includes(v);
     if (sec) sec.classList.toggle("hidden", v !== nombre);
-    if (btn) btn.classList.toggle("active", v === nombre);
+    if (btn) {
+      btn.style.display = permitido ? "" : "none";
+      btn.classList.toggle("active", v === nombre);
+    }
   });
   if (vistasSucias[nombre] || nombre === "parte" || nombre === "actas") {
     renderizarVistaSiCorresponde(nombre);
@@ -1858,7 +2550,7 @@ function aplicarDatosRecibidos(data, preservarSeleccionPantalla = false) {
     if (pill) {
       pill.style.display = "inline-flex";
       document.getElementById("lblActiveUserName").textContent = estado.usuarioActual.nombre;
-      document.getElementById("lblActiveUserRole").textContent = estado.usuarioActual.rol;
+      document.getElementById("lblActiveUserRole").textContent = obtenerRolesActuales().join(" + ");
     }
     if (estado.usuarioActual.nombre && !esRolFamiliaActual()) {
       document.getElementById("asistPreceptor").value = estado.usuarioActual.nombre;
@@ -1914,17 +2606,7 @@ function aplicarDatosRecibidos(data, preservarSeleccionPantalla = false) {
   const lblCursoPD = document.getElementById("pdCursoLabel");
   if (lblCursoPD) lblCursoPD.textContent = (data.cursoActual || "").replace(/_/g, " ");
 
-  const selCurso = document.getElementById("cursoSelect");
-  if (selCurso) {
-    selCurso.innerHTML = "";
-    (data.cursos || []).forEach(c => {
-      const opt = document.createElement("option");
-      opt.value = c;
-      opt.textContent = c.replace(/_/g, " ");
-      if (c === data.cursoActual) opt.selected = true;
-      selCurso.appendChild(opt);
-    });
-  }
+  poblarSelectorCursosAgrupado(data.cursos || [], data.cursoActual);
 
   if (typeof actualizarOpcionesTurnoGrupo === "function") actualizarOpcionesTurnoGrupo();
 
@@ -1960,8 +2642,30 @@ function aplicarDatosRecibidos(data, preservarSeleccionPantalla = false) {
     return;
   }
 
+  // Ajustar botones del encabezado según rol(es)
+  const btnMisAsig = document.getElementById("btnMisAsignaciones");
+  if (btnMisAsig) btnMisAsig.style.display = (!esFam) ? "inline-flex" : "none";
+
+  const puedeEditarMatricula = esPreceptorEnCursoActual() || tieneRolActual("SECRETARIA");
+  const puedeConfigHor = esPreceptorEnCursoActual();
+  const btnHor = document.getElementById("btnHeaderHorariosModal");
+  if (btnHor) btnHor.style.display = (!esFam && puedeConfigHor) ? "inline-flex" : "none";
+
+  document.querySelectorAll("#headerStaffControlsBar button").forEach(b => {
+    if (b.id === "btnHeaderNuevoCurso") {
+      b.style.display = (!esFam && esJefe) ? "inline-flex" : "none";
+    } else {
+      b.style.display = (!esFam && puedeEditarMatricula) ? "inline-flex" : "none";
+    }
+  });
+
+  const tabsPerm = obtenerPestanasPermitidasActual();
+  if (!tabsPerm.includes(vistaActualApp)) {
+    vistaActualApp = tabsPerm[0] || "materia";
+  }
+
   marcarVistasSucias();
-  renderizarVistaSiCorresponde(vistaActualApp || "asistencia");
+  mostrarVista(vistaActualApp);
   renderTarjetasCursosEnModal();
   sincronizarSelectoresAppWA();
 }
@@ -2438,5 +3142,308 @@ async function asignarGrupoRapidoEstudiante(filaHoja, valorElegido) {
     mostrarToast(`✅ ${est.nombre} ➔ ${nuevoGrp}`);
   } catch (err) {
     mostrarToast("⚠️ Error: " + err.message, 4000);
+  }
+}
+
+
+let coincidenciasHorariosCache = { cursosPreceptor: [], materiasDocente: [] };
+
+async function abrirModalMisAsignaciones() {
+  if (esRolFamiliaActual() || !estado.usuarioActual) return;
+  const modal = document.getElementById("modalMisAsignaciones");
+  if (!modal) return;
+
+  const roles = obtenerRolesActuales();
+  const emailTxt = estado.usuarioActual.emailAbc ? ` • 📧 ${escHtml(estado.usuarioActual.emailAbc)}` : "";
+  const badgesRolesHTML = roles.map(r => {
+    const btnQuitar = roles.length > 1
+      ? ` <button type="button" title="Quitar rol ${escHtml(r)}" style="border:none; background:none; color:#b91c1c; font-weight:900; cursor:pointer; padding:0 2px; margin-left:3px;" onclick="quitarRolPropioUI('${escHtml(r)}')">✖</button>`
+      : "";
+    return `<span class="badge badge-grp" style="display:inline-flex; align-items:center; margin-right:4px;">${escHtml(r)}${btnQuitar}</span>`;
+  }).join("");
+  const ayudaQuitar = roles.length > 1
+    ? `<div style="font-size:11px; color:#64748b; margin-top:4px;">Si cargaste un cargo por error, tocá la <b>✖</b> del rol que quieras remover.</div>`
+    : "";
+  document.getElementById("misAsigResumenRoles").innerHTML =
+    `<strong>👤 ${escHtml(estado.usuarioActual.nombre)}</strong> — Roles activos: ${badgesRolesHTML}${emailTxt}${ayudaQuitar}`;
+
+  const boxRol2 = document.getElementById("misAsigBoxSegundoRol");
+  if (boxRol2) {
+    boxRol2.style.display = roles.length < 2 ? "block" : "none";
+    const inpR2 = document.getElementById("misAsigCodigoRol2");
+    if (inpR2) inpR2.value = "";
+  }
+
+  const esPR = roles.includes("PRECEPTOR") && !tieneAlgunRolActual(["ADMIN", "DIRECTIVO", "JEFE_PR", "SECRETARIA", "EOE"]);
+  const esDoc = roles.includes("DOCENTE");
+  document.getElementById("misAsigBoxPreceptor").style.display = esPR ? "block" : "none";
+  document.getElementById("misAsigBoxDocente").style.display = esDoc ? "block" : "none";
+
+  // Mostrar cursos actuales de Preceptor (solo lectura)
+  const contPR = document.getElementById("misAsigListaCursosPR");
+  if (esPR && contPR) {
+    const misCursos = (estado.usuarioActual.cursosPermitidos || []).filter(Boolean);
+    contPR.innerHTML = misCursos.length > 0
+      ? misCursos.map(c => `<span class="badge badge-ok" style="font-size:12px; padding:5px 9px;">🏫 ${escHtml(c.replace(/_/g, " "))}</span>`).join("")
+      : `<span style="font-size:12px; color:#b45309;">Aún no tenés cursos detectados. Verificá que tu apellido + inicial figure en Horarios Parte y tocá <b>🔄 Sincronizar desde Horarios</b>.</span>`;
+  }
+
+  const contDoc = document.getElementById("misAsigListaMateriasDoc");
+  if (esDoc && contDoc) {
+    contDoc.innerHTML = `<span style="font-size:12px; color:#64748b;">⏳ Buscando tus materias en los Partes Diarios...</span>`;
+  }
+
+  modal.classList.add("open");
+
+  if (esDoc) {
+    try {
+      const resp = await fetch(scriptUrl, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({ accion: "obtenerMisCoincidenciasHorarios" })
+      });
+      const json = await resp.json();
+      if (!json.ok) throw new Error(json.error);
+      coincidenciasHorariosCache = json.coincidencias || { cursosPreceptor: [], materiasDocente: [] };
+      renderListaMateriasDocenteCoincidentes();
+    } catch (err) {
+      if (contDoc) contDoc.innerHTML = `<span style="font-size:12px; color:#b91c1c;">⚠️ Error al buscar en horarios: ${escHtml(err.message)}</span>`;
+    }
+  }
+}
+
+function cerrarModalMisAsignaciones() {
+  const modal = document.getElementById("modalMisAsignaciones");
+  if (modal) modal.classList.remove("open");
+}
+
+function renderListaMateriasDocenteCoincidentes() {
+  const cont = document.getElementById("misAsigListaMateriasDoc");
+  if (!cont) return;
+  const candidatas = (coincidenciasHorariosCache && coincidenciasHorariosCache.materiasDocente) || [];
+  const activas = (estado.usuarioActual && estado.usuarioActual.materiasDocente) || [];
+
+  if (candidatas.length === 0) {
+    cont.innerHTML = `<span style="font-size:12px; color:#92400e;">No se encontraron coincidencias para <b>${escHtml(estado.usuarioActual?.nombre || "")}</b> en los horarios del Parte Diario. Verificá con Preceptoría cómo figura tu apellido + inicial.</span>`;
+    return;
+  }
+
+  const normKey = (c, m) => `${String(c).toLowerCase()}::${String(m).normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^A-Z0-9]/gi, "").toUpperCase()}`;
+  const setActivas = new Set(activas.map(a => normKey(a.curso, a.materia)));
+
+  cont.innerHTML = candidatas.map((item, idx) => {
+    const chk = (activas.length === 0 || setActivas.has(normKey(item.curso, item.materia))) ? "checked" : "";
+    return `
+      <label style="display:flex; align-items:center; justify-content:space-between; gap:8px; padding:6px 8px; background:#fffbeb; border:1px solid #fde68a; border-radius:6px; cursor:pointer; font-size:12px;">
+        <span style="display:flex; align-items:center; gap:7px;">
+          <input type="checkbox" class="chk-mis-mats-doc" data-curso="${escHtml(item.curso)}" data-materia="${escHtml(item.materia)}" ${chk}>
+          <span><strong>${escHtml(item.curso.replace(/_/g, " "))}</strong> — ${escHtml(item.materia)}</span>
+        </span>
+        <small style="color:#64748b; font-weight:700;">Parte: ${escHtml(item.profesorHorario || "")}</small>
+      </label>
+    `;
+  }).join("");
+}
+
+async function sincronizarMisAsignacionesDesdeHorariosUI() {
+  const btn = document.getElementById("btnGuardarMisAsignaciones");
+  try {
+    mostrarToast("⏳ Sincronizando desde Horarios Parte...");
+    if (btn) btn.disabled = true;
+    const resp = await fetch(scriptUrl, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({
+        accion: "actualizarMisAsignaciones",
+        curso: estado.cursoActual || "",
+        sincronizarDesdeHorarios: true
+      })
+    });
+    const json = await resp.json();
+    if (!json.ok) throw new Error(json.error);
+
+    aplicarDatosRecibidos(json.data, false);
+    actualizarSubtituloHeader();
+    await abrirModalMisAsignaciones();
+    mostrarToast(`✅ Sincronizado (${json.detalle || "OK"})`, 3500);
+  } catch (err) {
+    mostrarToast("⚠️ Error: " + err.message, 4000);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function guardarMisAsignacionesUI() {
+  const roles = obtenerRolesActuales();
+  const codigoSegundoRol = document.getElementById("misAsigCodigoRol2")?.value.trim() || "";
+  const esDoc = roles.includes("DOCENTE");
+
+  const payload = {
+    accion: "actualizarMisAsignaciones",
+    curso: estado.cursoActual || ""
+  };
+  if (codigoSegundoRol) payload.codigoSegundoRol = codigoSegundoRol;
+  if (esDoc) {
+    payload.materiasDocente = Array.from(document.querySelectorAll(".chk-mis-mats-doc:checked")).map(cb => ({
+      curso: cb.dataset.curso,
+      materia: cb.dataset.materia
+    }));
+  }
+
+  const btn = document.getElementById("btnGuardarMisAsignaciones");
+  try {
+    if (btn) { btn.disabled = true; btn.textContent = "Guardando..."; }
+    const resp = await fetch(scriptUrl, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify(payload)
+    });
+    const json = await resp.json();
+    if (!json.ok) throw new Error(json.error);
+
+    aplicarDatosRecibidos(json.data, false);
+    actualizarSubtituloHeader();
+    cerrarModalMisAsignaciones();
+    mostrarToast("✅ Asignaciones guardadas");
+  } catch (err) {
+    mostrarToast("⚠️ Error: " + err.message, 4000);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "💾 Guardar Mis Asignaciones"; }
+  }
+}
+
+
+async function quitarRolPropioUI(rolAQuitar) {
+  const roles = obtenerRolesActuales();
+  if (roles.length <= 1) return mostrarToast("No podés quitar tu único rol activo.");
+  if (!confirm(`¿Seguro que querés remover el rol "${rolAQuitar}" de tu cuenta?`)) return;
+
+  try {
+    mostrarToast(`⏳ Removiendo rol ${rolAQuitar}...`);
+    const resp = await fetch(scriptUrl, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({
+        accion: "actualizarMisAsignaciones",
+        curso: estado.cursoActual || "",
+        quitarRol: rolAQuitar
+      })
+    });
+    const json = await resp.json();
+    if (!json.ok) throw new Error(json.error);
+
+    aplicarDatosRecibidos(json.data, false);
+    actualizarSubtituloHeader();
+    await abrirModalMisAsignaciones();
+    mostrarToast(`✅ Rol "${rolAQuitar}" removido de tu cuenta`);
+  } catch (err) {
+    mostrarToast("⚠️ Error: " + err.message, 4000);
+  }
+}
+
+
+let usuarioEnRecuperacionClave = "";
+
+function abrirRecuperarClaveLogin() {
+  document.getElementById("loginStepWelcome").style.display = "none";
+  document.getElementById("loginStepForm").style.display = "none";
+  document.getElementById("loginStepRegister").style.display = "none";
+  document.getElementById("loginStepRecover").style.display = "block";
+  document.getElementById("recSubStep1").style.display = "block";
+  document.getElementById("recSubStep2").style.display = "none";
+  mostrarErrorRecuperar("");
+  const prevUser = document.getElementById("authInputUser")?.value.trim() || "";
+  const inpRec = document.getElementById("recInputId");
+  if (inpRec) {
+    inpRec.value = prevUser;
+    setTimeout(() => inpRec.focus(), 60);
+  }
+}
+
+function volverALoginDesdeRecuperar() {
+  seleccionarModoLogin(modoLoginSeleccionado || "PERSONAL");
+}
+
+function mostrarErrorRecuperar(msg) {
+  const err = document.getElementById("recErrorBanner");
+  if (!err) return;
+  if (msg) {
+    err.textContent = msg;
+    err.style.display = "block";
+  } else {
+    err.style.display = "none";
+  }
+}
+
+async function solicitarPinRecuperarClave() {
+  mostrarErrorRecuperar("");
+  const identificador = document.getElementById("recInputId")?.value.trim() || "";
+  if (!identificador) return mostrarErrorRecuperar("Ingresá tu usuario, DNI o correo.");
+
+  const btn = document.getElementById("btnRecSolicitarPin");
+  try {
+    if (btn) { btn.disabled = true; btn.textContent = "⏳ Enviando código..."; }
+    const resp = await fetch(scriptUrl, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({
+        accion: "solicitarRecuperacionClave",
+        identificador: identificador
+      })
+    });
+    const json = await resp.json();
+    if (!json.ok) throw new Error(json.error);
+
+    usuarioEnRecuperacionClave = json.resultado.usuario;
+    document.getElementById("recLblEmailMask").textContent = json.resultado.emailEnmascarado;
+    document.getElementById("recSubStep1").style.display = "none";
+    document.getElementById("recSubStep2").style.display = "block";
+    document.getElementById("recInputPin").value = "";
+    document.getElementById("recInputPass1").value = "";
+    document.getElementById("recInputPass2").value = "";
+    setTimeout(() => document.getElementById("recInputPin").focus(), 60);
+  } catch (err) {
+    mostrarErrorRecuperar(err.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "📧 Enviar código de recuperación"; }
+  }
+}
+
+async function confirmarPinRecuperarClave() {
+  mostrarErrorRecuperar("");
+  const pin = document.getElementById("recInputPin")?.value.trim() || "";
+  const p1 = document.getElementById("recInputPass1")?.value.trim() || "";
+  const p2 = document.getElementById("recInputPass2")?.value.trim() || "";
+
+  if (!pin || pin.length < 6) return mostrarErrorRecuperar("Ingresá el código de 6 dígitos recibido en tu correo.");
+  if (p1.length < 6) return mostrarErrorRecuperar("La nueva contraseña debe tener al menos 6 caracteres.");
+  if (p1 !== p2) return mostrarErrorRecuperar("Las contraseñas no coinciden.");
+
+  const btn = document.getElementById("btnRecConfirmar");
+  try {
+    if (btn) { btn.disabled = true; btn.textContent = "⏳ Guardando..."; }
+    const resp = await fetch(scriptUrl, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({
+        accion: "confirmarRecuperacionClave",
+        usuario: usuarioEnRecuperacionClave,
+        pin: pin,
+        nuevaClave: p1
+      })
+    });
+    const json = await resp.json();
+    if (!json.ok) throw new Error(json.error);
+
+    volverALoginDesdeRecuperar();
+    const inpUser = document.getElementById("authInputUser");
+    if (inpUser) inpUser.value = usuarioEnRecuperacionClave;
+    const inpPass = document.getElementById("authInputPass");
+    if (inpPass) { inpPass.value = ""; inpPass.focus(); }
+    mostrarToast("✅ Contraseña restablecida. Ya podés ingresar.", 4000);
+  } catch (err) {
+    mostrarErrorRecuperar(err.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "✅ Guardar Nueva Contraseña"; }
   }
 }

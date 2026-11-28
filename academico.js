@@ -83,7 +83,10 @@ function poblarSelectorMateriasOrdenado(valorPrevio) {
   if (!selMat) return;
   selMat.innerHTML = "";
 
-  const ordenadas = obtenerMateriasOrdenadasVisualmente();
+  let ordenadas = obtenerMateriasOrdenadasVisualmente();
+  if (typeof esModoDocenteEnCursoActual === "function" && esModoDocenteEnCursoActual()) {
+    ordenadas = ordenadas.filter(m => typeof puedeEditarNotasMateriaActual === "function" && puedeEditarNotasMateriaActual(m));
+  }
   const teo = ordenadas.filter(m => !esMateriaDeTaller(m));
   const tal = ordenadas.filter(m => esMateriaDeTaller(m));
 
@@ -174,6 +177,64 @@ function debeIntensificarFebrero(objNotas) {
   const nDic = parsearNotaNumerica(objNotas.intDic);
   if (!isNaN(nDic) && nDic >= 4) return false;
   return true;
+}
+
+function evaluarEstadoIntensificacionMateria(objNotas) {
+  if (!objNotas) return { debeIntensificar: false, detalle: "" };
+  const finNum = parsearNotaNumerica(objNotas.final);
+  const nDic = parsearNotaNumerica(objNotas.intDic);
+  const nFeb = parsearNotaNumerica(objNotas.intFeb);
+  if ((!isNaN(finNum) && finNum >= 4) || (!isNaN(nDic) && nDic >= 4) || (!isNaN(nFeb) && nFeb >= 4)) {
+    return { debeIntensificar: false, detalle: "" };
+  }
+
+  // Solo avisa intensificación cuando el 2° cuatrimestre ya está cerrado (cal2 cargada)
+  const c2Raw = String(objNotas.cal2 || "").trim();
+  if (!c2Raw || c2Raw === "-") {
+    return { debeIntensificar: false, detalle: "" };
+  }
+
+  const c1 = parsearNotaNumerica(objNotas.cal1);
+  const c2 = parsearNotaNumerica(objNotas.cal2);
+  const i1 = parsearNotaNumerica(objNotas.int1);
+  const c1Up = String(objNotas.cal1 || "").trim().toUpperCase();
+  const c2Up = c2Raw.toUpperCase();
+
+  const aprobo1C = (!isNaN(c1) && c1 >= 7) || (!isNaN(i1) && i1 >= 7);
+  const aprobo2C = (!isNaN(c2) && c2 >= 7);
+  if (aprobo1C && aprobo2C) {
+    return { debeIntensificar: false, detalle: "" };
+  }
+
+  const desaprobo1C = !aprobo1C && ((!isNaN(c1) && c1 < 7) || c1Up === "AUS");
+  const desaprobo2C = !aprobo2C && ((!isNaN(c2) && c2 < 7) || c2Up === "AUS");
+  if (!desaprobo1C && !desaprobo2C) {
+    return { debeIntensificar: false, detalle: "" };
+  }
+
+  let detalle = "";
+  if (desaprobo1C && desaprobo2C) detalle = "1°C y 2°C";
+  else if (desaprobo1C) detalle = "1°C";
+  else detalle = "2°C";
+
+  return { debeIntensificar: true, detalle: detalle };
+}
+
+function obtenerMateriasAIntensificarInforme(est, listaMaterias) {
+  const resultado = [];
+  const tieneSubTallerEnLista = (listaMaterias || []).some(m => m.esSubTallerCB);
+  (listaMaterias || []).forEach(mat => {
+    if (tieneSubTallerEnLista && mat.esResumenTallerCB) return;
+    const notasMat = (est.notas && est.notas[mat.indice]) || {};
+    const ev = evaluarEstadoIntensificacionMateria(notasMat);
+    if (ev.debeIntensificar) {
+      resultado.push({
+        nombre: limpiarNombreMateria(mat.nombre),
+        detalle: ev.detalle
+      });
+    }
+  });
+  return resultado;
 }
 
 function calcularCalificacionFinalMateria(objNotas) {
@@ -1870,6 +1931,15 @@ async function generarImagenInformeAlumnoBlob(est) {
     infoLines.push(...envolverTextoCanvas(mctx, `Pendientes Años Ant. (${pendActivas.length}/${TOPE_MATERIAS_PENDIENTES}): ${txtP}`, CW - 16));
   }
 
+  const matsIntensificar = obtenerMateriasAIntensificarInforme(est, materiasFiltradas);
+  let intLines = [];
+  if (matsIntensificar.length > 0) {
+    mctx.font = "bold 11.5px Arial, sans-serif";
+    const txtInt = matsIntensificar.map(m => `${m.nombre} (${m.detalle})`).join(", ");
+    intLines = envolverTextoCanvas(mctx, `Debe intensificar (${matsIntensificar.length}): ${txtInt}.`, CW - 16);
+    mctx.font = "11.5px Arial, sans-serif";
+  }
+
   let notaLines = [];
   if (notaOpc) {
     notaLines = envolverTextoCanvas(mctx, `Nota: ${notaOpc}`, CW - 16);
@@ -1879,9 +1949,10 @@ async function generarImagenInformeAlumnoBlob(est) {
   const ROW_H = 24;
   const HDR_H = 24;
   const tableH = HDR_H + Math.max(1, materiasFiltradas.length) * ROW_H;
+  const intBoxH = intLines.length > 0 ? (intLines.length * 16 + 12 + 8) : 0;
   const notaBoxH = notaLines.length > 0 ? (notaLines.length * 16 + 12 + 8) : 0;
 
-  const H = PAD + 44 + 8 + 30 + 8 + infoBoxH + 8 + tableH + 8 + notaBoxH + 28 + PAD;
+  const H = PAD + 44 + 8 + 30 + 8 + infoBoxH + 8 + tableH + 8 + intBoxH + notaBoxH + 28 + PAD;
 
   const canvas = document.createElement("canvas");
   canvas.width = W * SCALE;
@@ -2008,8 +2079,13 @@ async function generarImagenInformeAlumnoBlob(est) {
         estilo = { bg: esTal ? "#eff6ff" : "#ffffff", fg: esTal ? "#0d47a1" : "#1e293b", bold: true };
       } else {
         const val = String(notasMat[c.key] || "").trim();
-        texto = val || "-";
-        estilo = obtenerColoresCeldaCanvas(val);
+        if (c.key === "final" && !val && evaluarEstadoIntensificacionMateria(notasMat).debeIntensificar) {
+          texto = "Intensif.";
+          estilo = { bg: "#fef3c7", fg: "#b45309", bold: true };
+        } else {
+          texto = val || "-";
+          estilo = obtenerColoresCeldaCanvas(val);
+        }
       }
 
       ctx.fillStyle = estilo.bg;
@@ -2033,6 +2109,19 @@ async function generarImagenInformeAlumnoBlob(est) {
   });
 
   y += 8;
+
+  if (intLines.length > 0) {
+    const bh = intLines.length * 16 + 12;
+    ctx.fillStyle = "#fffbeb";
+    ctx.fillRect(PAD, y, CW, bh);
+    ctx.strokeStyle = "#f59e0b";
+    ctx.lineWidth = 1.1;
+    ctx.strokeRect(PAD, y, CW, bh);
+    ctx.fillStyle = "#92400e";
+    ctx.font = "bold 11.5px Arial, sans-serif";
+    intLines.forEach((ln, idx) => ctx.fillText(ln, PAD + 8, y + 16 + idx * 16));
+    y += bh + 8;
+  }
 
   if (notaLines.length > 0) {
     const bh = notaLines.length * 16 + 12;
@@ -2312,14 +2401,14 @@ Todas las notas e inasistencias ya cargadas se conservan intactas.`)) {
   }
 }
 
-function crearSelectorNotaHTML(filaHoja, colHoja, valorActual, tipo, claveCampo = "", esResumenTaller = false, objNotasMateria = null) {
+function crearSelectorNotaHTML(filaHoja, colHoja, valorActual, tipo, claveCampo = "", esResumenTaller = false, objNotasMateria = null, soloLecturaRol = false) {
   const v = String(valorActual || "").toUpperCase().trim().replace(",", ".");
   const clColor = obtenerClaseColorNota(v);
   const esCampoFinal = (claveCampo === "final");
   const esCampoInt1 = (claveCampo === "int1");
   const esCampoDic = (claveCampo === "intDic");
   const esCampoFeb = (claveCampo === "intFeb");
-  const esFam = (typeof esRolFamiliaActual === "function" && esRolFamiliaActual());
+  const esFam = (typeof esRolFamiliaActual === "function" && esRolFamiliaActual()) || Boolean(soloLecturaRol);
   const sinColumnaMigrada = (Number(colHoja) === -1);
 
   let int1BloqueadoPorRegla = false;
@@ -2405,11 +2494,25 @@ function renderVistaMateria() {
   if (!cont) return;
   const mostrarTachados = document.getElementById("chkMostrarTachadosMateria")?.checked;
   const idxMat = parseInt(document.getElementById("materiaSelect")?.value || "0", 10);
-  const mat = (estado.materias || []).find(m => m.indice === idxMat);
-  if (!mat) { cont.innerHTML = "<p>Sin materias.</p>"; return; }
+  const esModoDoc = typeof esModoDocenteEnCursoActual === "function" && esModoDocenteEnCursoActual();
+  const puedeGestionarCurso = typeof esPreceptorEnCursoActual === "function" ? esPreceptorEnCursoActual() : true;
+  document.querySelectorAll("#vista-materia .panel-title button").forEach(b => {
+    b.style.display = puedeGestionarCurso ? "" : "none";
+  });
 
+  const mat = (estado.materias || []).find(m => m.indice === idxMat);
+  if (!mat) {
+    cont.innerHTML = esModoDoc
+      ? `<div style="padding:14px; background:#eff6ff; border:1px solid #bfdbfe; border-radius:8px; color:#1e3a8a; font-size:13px;">
+          No tenés materias asignadas en este curso todavía. Tocá <b>🎯 Mis Cargos</b> arriba para elegir tus cursos y materias.
+        </div>`
+      : "<p>Sin materias.</p>";
+    return;
+  }
+
+  const soloLecturaMat = typeof puedeEditarNotasMateriaActual === "function" ? !puedeEditarNotasMateriaActual(mat) : false;
   const esTal = esMateriaDeTaller(mat);
-  let html = construirBannerMigracionDicFebHTML() + `
+  let html = (puedeGestionarCurso ? construirBannerMigracionDicFebHTML() : "") + `
     <div class="section-divider-banner ${esTal ? 'divider-taller' : 'divider-teoria'}" style="display:flex; justify-content:space-between; align-items:center;">
       <span>${esTal ? '🔧 Materia de Taller' : '📘 Materia de Teoría'}: ${mat.nombre}</span>
       <span class="tag-tipo-mat ${esTal ? 'tag-tipo-taller' : 'tag-tipo-teoria'}"
@@ -2433,11 +2536,11 @@ function renderVistaMateria() {
         </strong>
         <div style="display:flex; gap:5px; align-items:center;">
           <span class="badge badge-grp">${est.grupo}</span>
-          <button class="btn-outline" style="padding:3px 7px; font-size:10.5px;" title="Editar N° Orden / Nombre / Grupo" onclick="editarDatosEstudiante(${est.filaHoja})">✏️</button>
+          ${puedeGestionarCurso ? `<button class="btn-outline" style="padding:3px 7px; font-size:10.5px;" title="Editar N° Orden / Nombre / Grupo" onclick="editarDatosEstudiante(${est.filaHoja})">✏️</button>
           ${tachado
             ? `<button class="btn-success-outline" style="padding:3px 7px; font-size:10.5px;" onclick="alternarEstadoTachado(${est.filaHoja})">✅</button>`
             : `<button class="btn-danger-outline" style="padding:3px 7px; font-size:10.5px;" onclick="alternarEstadoTachado(${est.filaHoja})">🚫</button>`
-          }
+          }` : ""}
         </div>
       </div>
       <div class="grade-inputs-grid">`;
@@ -2447,7 +2550,7 @@ function renderVistaMateria() {
       const etiquetaCampo = (sc.key === "final") ? `${sc.label} (Auto)` : sc.label;
       html += `<div class="mini-field">
         <label>${etiquetaCampo}</label>
-        <div>${crearSelectorNotaHTML(est.filaHoja, colHoja, notasMat[sc.key], sc.tipo, sc.key, esResumenTaller, notasMat)}</div>
+        <div>${crearSelectorNotaHTML(est.filaHoja, colHoja, notasMat[sc.key], sc.tipo, sc.key, esResumenTaller, notasMat, soloLecturaMat)}</div>
       </div>`;
     });
     html += `</div></div>`;
@@ -2492,6 +2595,10 @@ function formatearLineaMateriaWhatsApp(mat, est) {
       partes.push(`${sc.shortLabel}: ${val || "-"}`);
     }
   });
+  const evInt = evaluarEstadoIntensificacionMateria(notasMat);
+  if (evInt.debeIntensificar) {
+    partes.push(`*Debe intensificar (${evInt.detalle})*`);
+  }
   const detalle = partes.length > 0 ? partes.join(" | ") : "_Sin notas_";
   return `• *${limpiarNombreMateria(mat.nombre)}:* ${detalle}`;
 }
@@ -2546,6 +2653,14 @@ function construirMensajeWhatsAppAlumno(est) {
   if ((configInformeAlumno.ambito === "TODO" || configInformeAlumno.ambito === "TALLER") && matsTaller.length > 0) {
     lineas.push(``, `🔧 *TALLER:*`);
     matsTaller.forEach(m => lineas.push(formatearLineaMateriaWhatsApp(m, est)));
+  }
+
+  const matsIntWA = obtenerMateriasAIntensificarInforme(est, materiasOrdenadas);
+  if (matsIntWA.length > 0) {
+    lineas.push(``, `📌 *Debe intensificar (${matsIntWA.length}):*`);
+    matsIntWA.forEach(m => {
+      lineas.push(`• *${m.nombre}* _(${m.detalle})_`);
+    });
   }
 
   const pendActivasWA = obtenerPendientesDeEstudiante(est).filter(p => p.estado !== "ACREDITADA");
@@ -2611,9 +2726,16 @@ function construirTalonComunicadoHTML(est) {
       <td class="${obtenerClaseColorNota(notasMat.int1)}">${notasMat.int1 || "-"}</td>
       <td class="${obtenerClaseColorNota(notasMat.intDic)}">${notasMat.intDic || "-"}</td>
       <td class="${obtenerClaseColorNota(notasMat.intFeb)}">${notasMat.intFeb || "-"}</td>
-      <td class="${obtenerClaseColorNota(notasMat.final)}"><strong>${notasMat.final || "-"}</strong></td>
+      ${(() => {
+        const finVal = String(notasMat.final || "").trim();
+        if (!finVal && evaluarEstadoIntensificacionMateria(notasMat).debeIntensificar) {
+          return `<td class="val-CI"><strong>Intensif.</strong></td>`;
+        }
+        return `<td class="${obtenerClaseColorNota(finVal)}"><strong>${finVal || "-"}</strong></td>`;
+      })()}
     </tr>`;
   });
+  const matsIntTalon = obtenerMateriasAIntensificarInforme(est, materiasFiltradas);
 
   return `
     <div class="comunicado-slip">
@@ -2652,6 +2774,10 @@ function construirTalonComunicadoHTML(est) {
         </thead>
         <tbody>${filasTabla}</tbody>
       </table>
+      ${matsIntTalon.length > 0 ? `
+      <div style="background:#fffbeb; border:1px solid #f59e0b; color:#92400e; padding:4px 6px; margin-bottom:5px; font-size:9.2px; font-weight:bold;">
+        Debe intensificar (${matsIntTalon.length}): ${matsIntTalon.map(m => `${m.nombre} (${m.detalle})`).join(", ")}.
+      </div>` : ""}
       <div class="com-sign-row">
         <div><div class="com-sign-box"></div>Firma Familiar / Tutor</div>
         <div><div class="com-sign-box"></div>Firma Estudiante</div>
@@ -2777,7 +2903,7 @@ function aplicarPlantillaNotificacionAlumno(tipoPlantilla, filaHoja) {
   }
 }
 
-async function enviarNotificacionFamiliaUI(filaHoja) {
+async function enviarNotificacionFamiliaUI(filaHoja, usarCorreoPropio = false) {
   const est = (estado.estudiantes || []).find(e => e.filaHoja === Number(filaHoja));
   if (!est) return;
 
@@ -2816,7 +2942,8 @@ async function enviarNotificacionFamiliaUI(filaHoja) {
           mensaje: mensaje,
           fechaCitacion: fechaCitFormateada,
           horaCitacion: horaCit,
-          emailDestino: emailDest
+          emailDestino: emailDest,
+          omitirEmailAutomatico: Boolean(usarCorreoPropio)
         }
       })
     });
@@ -2824,7 +2951,15 @@ async function enviarNotificacionFamiliaUI(filaHoja) {
     if (!json.ok) throw new Error(json.error);
 
     aplicarDatosRecibidos(json.data, true);
-    mostrarToast(json.emailEnviado ? `📧 Notificación enviada por Email y App` : `📌 Guardada en App (${json.detalleEmail})`, 4500);
+    if (usarCorreoPropio) {
+      mostrarToast("📌 Publicada en el Portal. Abriendo tu correo...", 3500);
+      const cursoLimpio = (estado.cursoActual || "").replace(/_/g, " ");
+      const subj = `[E.E.S.T. N° 2] ${asunto} - ${est.nombre} (${cursoLimpio})`;
+      const cuerpo = mensaje + (fechaCitFormateada ? `\n\nCitación presencial: ${fechaCitFormateada} ${horaCit ? horaCit + " hs" : ""}` : "") + `\n\nEmitido por: ${estado.usuarioActual?.nombre || "Preceptoría"}`;
+      window.location.href = `mailto:${encodeURIComponent(emailDest || "")}?subject=${encodeURIComponent(subj)}&body=${encodeURIComponent(cuerpo)}`;
+    } else {
+      mostrarToast(json.emailEnviado ? `📧 Notificación enviada por Email y App` : `📌 Guardada en App (${json.detalleEmail})`, 4500);
+    }
   } catch (err) {
     mostrarToast("⚠️ Error: " + err.message, 4000);
   }
@@ -3076,7 +3211,7 @@ function construirSeccionPendientesAlumnoHTML(est, esFam) {
   let html = `
     <div class="panel pendientes-panel" style="margin-bottom:14px; border:1px solid #fdba74; background:#fffaf5;">
       <div class="panel-title" style="color:#9a3412;">
-        <span>Materias Pendientes de Acreditación</span>
+        <span>Materias Pendientes de Acreditación <button type="button" class="info-norm-btn" onclick="mostrarInfoNormativa('pendientes_etp')" title="Ver tope ETP (5 materias), Comisiones Evaluadoras y EDTE">ℹ️</button></span>
         <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
           ${badgeTope}
           ${!esFam ? `<button type="button" class="btn-outline" style="border-color:#c2410c; color:#9a3412;" onclick="toggleFormNuevaPendiente()">+ Cargar Pendiente</button>` : ""}
@@ -3287,7 +3422,7 @@ function construirSeccionGraficosAsistenciaHTML(est, resumenPorMateria) {
 
     <div class="panel" style="margin-bottom:14px; border:1px solid #cbd5e1;">
       <div class="panel-title" style="margin-bottom:6px;">
-        <span>Asistencia por Materia (75% mínimo)</span>
+        <span>Asistencia por Materia (75% mínimo) <button type="button" class="info-norm-btn" onclick="mostrarInfoNormativa('asistencia_75')" title="Ver regla DGCyE de 28 faltas y 75%">ℹ️</button></span>
         <span class="badge ${totFaltas >= 28 ? 'badge-danger' : 'badge-grp'}">
           ${totFaltas >= 28 ? '🚨 ACTIVO POR SUPERAR 28 FALTAS (Res. 1650/24)' : 'ℹ️ Seguimiento Preventivo por Asignatura'}
         </span>
@@ -3392,6 +3527,16 @@ function renderVistaAlumno() {
     </div>
   `;
 
+  const matsIntPortal = obtenerMateriasAIntensificarInforme(est, obtenerMateriasOrdenadasVisualmente());
+  if (matsIntPortal.length > 0) {
+    html += `
+      <div style="background:#fffbeb; border:1px solid #f59e0b; border-left:5px solid #d97706; border-radius:8px; padding:10px 12px; margin-bottom:12px; color:#92400e; font-size:12.5px; line-height:1.45;">
+        <strong>Debe intensificar (${matsIntPortal.length}):</strong>
+        ${matsIntPortal.map(m => `${m.nombre} (${m.detalle})`).join(", ")}.
+      </div>
+    `;
+  }
+
   html += construirSeccionGraficosAsistenciaHTML(est, resumenPorMateria);
   html += construirSeccionPendientesAlumnoHTML(est, esFam);
 
@@ -3472,9 +3617,12 @@ function renderVistaAlumno() {
           <label>Mensaje Oficial</label>
           <textarea id="notifInputMensaje" rows="4" placeholder="Escribí el mensaje o tocá una de las plantillas rápidas de arriba..."></textarea>
         </div>
-        <div style="display:flex; justify-content:flex-end; margin-top:10px;">
-          <button type="button" class="btn-main btn-print-blue" style="padding:9px 16px; font-size:13px;" onclick="enviarNotificacionFamiliaUI(${est.filaHoja})">
-            📧 Enviar Correo Oficial y Publicar en Portal de la Familia
+        <div style="display:flex; justify-content:flex-end; gap:8px; flex-wrap:wrap; margin-top:10px;">
+          <button type="button" class="btn-outline" style="padding:9px 14px; font-size:12.5px; border-color:#1e3a8a; color:#1e3a8a;" onclick="enviarNotificacionFamiliaUI(${est.filaHoja}, true)">
+            ✉️ Publicar en Portal + Abrir mi Correo
+          </button>
+          <button type="button" class="btn-main btn-print-blue" style="padding:9px 16px; font-size:13px;" onclick="enviarNotificacionFamiliaUI(${est.filaHoja}, false)">
+            📧 Enviar Automático y Publicar en Portal
           </button>
         </div>
       </div>
@@ -3572,17 +3720,21 @@ function renderVistaAlumno() {
 
     const notasMat = (est.notas && est.notas[mat.indice]) || {};
     const esResumenTaller = Boolean(mat.esResumenTallerCB);
+    const evIntCard = evaluarEstadoIntensificacionMateria(notasMat);
 
     html += `<div class="grade-card ${esResumenTaller ? 'resumen-taller-card' : ''}">
       <div style="display:flex; justify-content:space-between; align-items:center; gap:6px; flex-wrap:wrap;">
         <strong style="font-size:13px; color:#1e3a8a;">${mat.nombre} ${esResumenTaller ? ' 🔧 (Promedio)' : ''}</strong>
-        <span class="tag-tipo-mat ${esTal ? 'tag-tipo-taller' : 'tag-tipo-teoria'}" ${!esFam ? `title="Tocá para cambiar entre Teoría y Taller" onclick="alternarTipoMateriaTallerTeoria(${mat.indice})"` : ''}>${esTal ? '🔧 Taller' : '📘 Teoría'}</span>
+        <div style="display:flex; gap:5px; align-items:center; flex-wrap:wrap;">
+          ${evIntCard.debeIntensificar ? `<span class="badge val-CI">Debe intensificar (${evIntCard.detalle})</span>` : ""}
+          <span class="tag-tipo-mat ${esTal ? 'tag-tipo-taller' : 'tag-tipo-teoria'}" ${!esFam ? `title="Tocá para cambiar entre Teoría y Taller" onclick="alternarTipoMateriaTallerTeoria(${mat.indice})"` : ''}>${esTal ? '🔧 Taller' : '📘 Teoría'}</span>
+        </div>
       </div>
       <div class="grade-inputs-grid">`;
     SUB_CAMPOS.forEach(sc => {
       const colHoja = obtenerColumnaHojaSubCampo(mat, sc);
       const etiquetaCampo = (sc.key === "final") ? `${sc.label} (Auto)` : sc.label;
-      html += `<div class="mini-field"><label>${etiquetaCampo}</label><div>${crearSelectorNotaHTML(est.filaHoja, colHoja, notasMat[sc.key], sc.tipo, sc.key, esResumenTaller, notasMat)}</div></div>`;
+      html += `<div class="mini-field"><label>${etiquetaCampo}</label><div>${crearSelectorNotaHTML(est.filaHoja, colHoja, notasMat[sc.key], sc.tipo, sc.key, esResumenTaller, notasMat, (typeof puedeEditarNotasMateriaActual === 'function' ? !puedeEditarNotasMateriaActual(mat) : false))}</div></div>`;
     });
     html += `</div></div>`;
   });
@@ -4031,6 +4183,14 @@ function renderVistaActas() {
       </div>
     </div>
 
+    ${(!enBlanco && typeof tieneAlgunRolActual === "function" && tieneAlgunRolActual(["ADMIN", "DIRECTIVO", "EOE"])) ? `
+    <div style="margin-bottom:10px; background:#fef2f2; border:1px solid #fecaca; border-radius:7px; padding:8px 10px;">
+      <label style="display:flex; align-items:center; gap:7px; font-size:12px; font-weight:800; color:#991b1b; cursor:pointer;">
+        <input type="checkbox" id="actaChkReservada" style="width:16px; height:16px;">
+        🔒 Acta reservada (solo visible en el historial para EOE y Equipo Directivo)
+      </label>
+    </div>` : ""}
+
     <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
       <button type="button" class="btn-main btn-print-blue" style="flex:1;" onclick="imprimirActaActualA4()">
         🖨️ Imprimir Acta Oficial A4 / Guardar PDF
@@ -4093,9 +4253,11 @@ async function guardarActaActualEnSheet() {
   if (!est) return;
 
   const totFaltas = (est.inasistencias && est.inasistencias.total) || 0;
-  const escalon = estadoGeneradorActa.tipoActa === "INCOMPARECENCIA"
+  const esReservada = document.getElementById("actaChkReservada")?.checked || false;
+  const escalonBase = estadoGeneradorActa.tipoActa === "INCOMPARECENCIA"
     ? "INCOMPARECENCIA"
     : `UMBRAL_${determinarEscalonInasistencias(totFaltas)}`;
+  const escalon = esReservada ? `${escalonBase} [RESERVADA]` : escalonBase;
 
   try {
     mostrarToast("⏳ Guardando acta en Registro_Actas...");
